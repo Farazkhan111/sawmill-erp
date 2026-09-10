@@ -596,12 +596,13 @@ async function initAuthGate(){
      { activeCompanyId, companies: [ {id, data:{company,settings,parties,lots,vouchers}}, ... ] }
    In memory, `DB` always points at the ACTIVE company's `data` object —
    every existing function in this file reads/writes DB.company, DB.parties,
-   DB.lots, DB.vouchers etc. exactly as before. `APP` is the outer registry
+   SHARED.lots, DB.vouchers etc. exactly as before. `APP` is the outer registry
    that makes switching companies possible.
 ========================================================================= */
 const BACKUP_KEY = 'sawmill_last_backup_v1';
 let DB = null;
-let APP = null; // { activeCompanyId, companies:[{id, data}] }
+let APP = null; // { activeCompanyId, companies:[{id, data}], shared:{lots,khata,managerLedger,stockInKG} }
+let SHARED = null; // same object reference as APP.shared — stock/khata/manager, common to every company
 let SAVE_PENDING = false;
 
 function defaultDB(){
@@ -612,11 +613,7 @@ function defaultDB(){
       density:{'Teak':750,'Sal':850,'Sheesham (Rosewood)':800,'Mango':560,'Pine':500,'Deodar':550,'Rubber Wood':560,'Neem':680,'Babul':780,'Kikar':750,'Gamhar':480,'Mahogany':600},
       lowStockThresholds:{}},
     parties:[],
-    lots:[],
     vouchers:[],
-    khata:[],
-    managerLedger:[],
-    stockInKG:[],
     trash:[]
   };
 }
@@ -630,37 +627,74 @@ function ensureDataDefaults(data){
   if(!data.settings.counters) data.settings.counters = defaultDB().settings.counters;
   if(!data.settings.lowStockThresholds) data.settings.lowStockThresholds = {};
   if(!data.parties) data.parties = [];
-  if(!data.lots) data.lots = [];
   if(!data.vouchers) data.vouchers = [];
-  if(!data.khata) data.khata = [];
-  if(!data.managerLedger) data.managerLedger = [];
-  if(!data.stockInKG) data.stockInKG = [];
   if(!data.trash) data.trash = [];
   return data;
+}
+
+// SHARED data — timber-lot stock, KG-based stock, the Khata Book, and the
+// Manager Ledger all live HERE, once, at the top level of APP (not inside
+// any single company). Every company you switch between reads and writes
+// this same object, so stock levels, khata entries and manager accounts are
+// identical no matter which company is currently active.
+function defaultShared(){
+  return { lots:[], khata:[], managerLedger:[], stockInKG:[] };
+}
+function ensureSharedDefaults(shared){
+  if(!shared.lots) shared.lots = [];
+  if(!shared.khata) shared.khata = [];
+  if(!shared.managerLedger) shared.managerLedger = [];
+  if(!shared.stockInKG) shared.stockInKG = [];
+  return shared;
 }
 
 function companyDisplayName(entry){
   return (entry.data.company && entry.data.company.name && entry.data.company.name.trim()) || 'Unnamed Company';
 }
 
+// Pulls a shared store out of `raw`, migrating older files (from before
+// stock/khata/manager became shared) by merging whatever each company had
+// under data.lots / data.khata / data.managerLedger / data.stockInKG into
+// one combined store — so nothing already entered gets lost in the switch.
+function buildSharedFromLegacy(raw){
+  const shared = defaultShared();
+  const seen = {lots:new Set(), khata:new Set(), managerLedger:new Set(), stockInKG:new Set()};
+  const companies = (raw && Array.isArray(raw.companies)) ? raw.companies : (raw ? [{data:raw}] : []);
+  companies.forEach(c=>{
+    const d = c && c.data;
+    if(!d) return;
+    ['lots','khata','managerLedger','stockInKG'].forEach(key=>{
+      (d[key]||[]).forEach(item=>{
+        if(item && item.id && seen[key].has(item.id)) return;
+        if(item && item.id) seen[key].add(item.id);
+        shared[key].push(item);
+      });
+    });
+  });
+  return shared;
+}
+
 // Accepts whatever came back from /api/db and always returns the new
-// { activeCompanyId, companies:[...] } shape — migrating a pre-multi-company
-// file (which was just the old `data` object directly) into a single company.
+// { activeCompanyId, companies:[...], shared:{...} } shape — migrating a
+// pre-multi-company file (which was just the old `data` object directly)
+// into a single company, and migrating pre-shared-stock files too.
 function normalizeAppData(raw){
   if(raw && Array.isArray(raw.companies) && raw.companies.length){
     raw.companies.forEach(c=>{ if(!c.data) c.data = defaultDB(); ensureDataDefaults(c.data); if(!c.id) c.id = uid(); });
     if(!raw.activeCompanyId || !raw.companies.some(c=>c.id===raw.activeCompanyId)){
       raw.activeCompanyId = raw.companies[0].id;
     }
+    raw.shared = raw.shared ? ensureSharedDefaults(raw.shared) : buildSharedFromLegacy(raw);
     return raw;
   }
   if(raw && Array.isArray(raw.vouchers)){
+    const shared = buildSharedFromLegacy(raw);
     ensureDataDefaults(raw);
     const id = uid();
-    return { activeCompanyId:id, companies:[{id, data:raw}] };
+    return { activeCompanyId:id, companies:[{id, data:raw}], shared };
   }
   const id = uid();
-  return { activeCompanyId:id, companies:[{id, data:defaultDB()}] };
+  return { activeCompanyId:id, companies:[{id, data:defaultDB()}], shared: defaultShared() };
 }
 
 function activateCompany(id, opts){
@@ -669,6 +703,8 @@ function activateCompany(id, opts){
   APP.activeCompanyId = entry.id;
   DB = entry.data;
   ensureDataDefaults(DB);
+  SHARED = APP.shared;
+  ensureSharedDefaults(SHARED);
   if(!opts.skipPersist) persist();
 }
 
@@ -696,6 +732,7 @@ function saveDB(){
   // already in sync — this just makes sure the id lines up before writing.
   const entry = APP.companies.find(c=>c.id===APP.activeCompanyId);
   if(entry) entry.data = DB;
+  APP.shared = SHARED;
   const snapshot = JSON.stringify(APP);
   _saveChain = _saveChain.then(async ()=>{
     try{
@@ -883,7 +920,7 @@ function nextVoucherNumber(type, dateStr){
 }
 
 function getParty(id){ return DB.parties.find(p=>p.id===id); }
-function getLot(id){ return DB.lots.find(l=>l.id===id); }
+function getLot(id){ return SHARED.lots.find(l=>l.id===id); }
 function customers(){ return DB.parties.filter(p=>p.type==='customer'); }
 function suppliers(){ return DB.parties.filter(p=>p.type==='supplier'); }
 function salesVouchers(){ return DB.vouchers.filter(v=>v.type==='sales'); }
@@ -1044,7 +1081,7 @@ function renderDashboard(){
   const receivables = customers().reduce((s,p)=>s+partyBalance(p.id),0);
   const payables = suppliers().reduce((s,p)=>s+partyBalance(p.id),0);
 
-  const stockCFT = DB.lots.reduce((s,l)=>s+(l.purchasedCFT-l.soldCFT),0);
+  const stockCFT = SHARED.lots.reduce((s,l)=>s+(l.purchasedCFT-l.soldCFT),0);
 
   const monthProfit = sum(monthSales,v=>v.taxableAmount) - estimateCOGS(monthSales) - sum(paymentVouchers().filter(v=>v.date.slice(0,7)===thisMonth && !v.partyId),v=>v.amount);
 
@@ -1214,7 +1251,7 @@ function renderSettingsPage(){
 
   <div class="card" style="border:1px solid var(--copper);background:#fbf3ea;">
     <div class="card-title">🏢 Companies</div>
-    <p class="page-sub" style="margin-top:-6px;">Each company keeps its own parties, stock, invoices and ledgers — completely separate books. You're currently working in <b>${esc(companyDisplayName({data:DB}))}</b>.</p>
+    <p class="page-sub" style="margin-top:-6px;">Each company keeps its own parties, invoices and settings — separate books. Stock (Timber Lots &amp; KG Stock), the Khata Book and the Manager Ledger are shared across every company. You're currently working in <b>${esc(companyDisplayName({data:DB}))}</b>.</p>
     <div class="tbl-wrap" style="margin-bottom:12px;">
       <table>
         <thead><tr><th>Company</th><th>GSTIN</th><th class="num">Invoices</th><th style="width:220px;"></th></tr></thead>
@@ -1506,7 +1543,7 @@ function openNewCompanyModal(){
   <div class="modal-bg" onclick="if(event.target===this)closeModal()">
     <div class="modal">
       <div class="modal-head"><h3>Add New Company</h3><button class="close-x" onclick="closeModal()">✕</button></div>
-      <p class="page-sub" style="margin-top:-8px;">Starts with completely empty books — no parties, stock or invoices carry over from your other companies.</p>
+      <p class="page-sub" style="margin-top:-8px;">Starts with empty parties, invoices and settings — nothing there carries over from your other companies. Stock, the Khata Book and the Manager Ledger are shared, so they'll already show your existing data.</p>
       <div class="field"><label>Company Name *</label><input id="nc_name" placeholder="e.g. Rahul Timber Traders — Jaipur Branch"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;">
         <button class="btn" onclick="closeModal()">Cancel</button>
@@ -1554,7 +1591,11 @@ function deleteCompanyPrompt(id){
 ========================================================================= */
 function exportBackup(){
   try{
-    const blob = new Blob([JSON.stringify(DB, null, 2)], {type:'application/json'});
+    // Stock, Khata Book and Manager Ledger are shared across all companies,
+    // so fold them into this company's backup file too (not just its own
+    // parties/vouchers/settings) — that way a single file is a complete copy.
+    const full = {...DB, lots:SHARED.lots, khata:SHARED.khata, managerLedger:SHARED.managerLedger, stockInKG:SHARED.stockInKG};
+    const blob = new Blob([JSON.stringify(full, null, 2)], {type:'application/json'});
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -1589,15 +1630,28 @@ function importBackup(inputEl){
       inputEl.value = '';
       return;
     }
-    if(!confirm(`This will REPLACE all data for "${DB.company.name||'this company'}" with this backup file. Other companies are not affected. This cannot be undone. Continue?`)){
+    if(!confirm(`This will REPLACE all data for "${DB.company.name||'this company'}" (parties, invoices, settings) with this backup file. Stock, Khata Book and Manager Ledger are shared across every company, so restoring them from this file will replace those for ALL your companies, not just this one. This cannot be undone. Continue?`)){
       inputEl.value = '';
       return;
     }
+    // Pull the shared parts (if this backup has them) out before the rest
+    // of `parsed` gets treated as this one company's private data.
+    const restoredShared = {
+      lots: Array.isArray(parsed.lots) ? parsed.lots : null,
+      khata: Array.isArray(parsed.khata) ? parsed.khata : null,
+      managerLedger: Array.isArray(parsed.managerLedger) ? parsed.managerLedger : null,
+      stockInKG: Array.isArray(parsed.stockInKG) ? parsed.stockInKG : null
+    };
     DB = parsed;
     if(!DB.vouchers) DB = defaultDB();
     if(!DB.settings.species) DB.settings.species = defaultDB().settings.species;
     if(!DB.settings.density) DB.settings.density = defaultDB().settings.density;
     ensureDataDefaults(DB);
+    delete DB.lots; delete DB.khata; delete DB.managerLedger; delete DB.stockInKG;
+    if(restoredShared.lots) SHARED.lots = restoredShared.lots;
+    if(restoredShared.khata) SHARED.khata = restoredShared.khata;
+    if(restoredShared.managerLedger) SHARED.managerLedger = restoredShared.managerLedger;
+    if(restoredShared.stockInKG) SHARED.stockInKG = restoredShared.stockInKG;
     {
       const entry = APP.companies.find(c=>c.id===APP.activeCompanyId);
       if(entry) entry.data = DB;
@@ -1743,7 +1797,7 @@ function blankItem(){
 
 function itemRowHTML(item, idx){
   const {amount} = calcItemAmount(item);
-  const lotOptions = DB.lots.map(l=>`<option value="${l.id}" ${item.lotId===l.id?'selected':''}>${esc(l.lotNo)} — ${esc(l.wood)} (${numFmt(l.purchasedCFT-l.soldCFT,1)} CFT left)</option>`).join('');
+  const lotOptions = SHARED.lots.map(l=>`<option value="${l.id}" ${item.lotId===l.id?'selected':''}>${esc(l.lotNo)} — ${esc(l.wood)} (${numFmt(l.purchasedCFT-l.soldCFT,1)} CFT left)</option>`).join('');
   return `
   <tr class="item-row" data-idx="${idx}">
     <td>${idx+1}</td>
@@ -2157,7 +2211,7 @@ function restoreTrashItem(trashId){
   if(entry.kind==='party'){
     if(!DB.parties.some(p=>p.id===entry.data.id)) DB.parties.push(entry.data);
   } else if(entry.kind==='lot'){
-    if(!DB.lots.some(l=>l.id===entry.data.id)) DB.lots.push(entry.data);
+    if(!SHARED.lots.some(l=>l.id===entry.data.id)) SHARED.lots.push(entry.data);
   } else if(entry.kind==='voucher'){
     if(!DB.vouchers.some(v=>v.id===entry.data.id)){
       DB.vouchers.push(entry.data);
@@ -2332,9 +2386,9 @@ function savePurchaseBill(existingId){
     let lotId = it.lotId;
     if(!lotId && it.wood){
       // auto-create lot
-      const lotNo = 'LOT-'+String(DB.lots.length+1).padStart(3,'0');
+      const lotNo = 'LOT-'+String(SHARED.lots.length+1).padStart(3,'0');
       const newLot = {id:uid(), lotNo, wood:it.wood, species:it.species||'', warehouse:'Main', purchasedCFT:0, soldCFT:0, avgRate:0};
-      DB.lots.push(newLot);
+      SHARED.lots.push(newLot);
       lotId = newLot.id;
     }
     return {...it, cft, cbm, amount, lotId};
@@ -2539,11 +2593,11 @@ function renderPaymentsList(){
 ========================================================================= */
 function combinedStockByWood(){
   const map = {};
-  (DB.lots||[]).forEach(l=>{
+  (SHARED.lots||[]).forEach(l=>{
     if(!map[l.wood]) map[l.wood]={wood:l.wood, cftLots:0, kgStock:0};
     map[l.wood].cftLots = round3(map[l.wood].cftLots + (l.purchasedCFT-l.soldCFT));
   });
-  (DB.stockInKG||[]).forEach(e=>{
+  (SHARED.stockInKG||[]).forEach(e=>{
     if(!map[e.wood]) map[e.wood]={wood:e.wood, cftLots:0, kgStock:0};
     map[e.wood].kgStock = round3(map[e.wood].kgStock + e.qty);
   });
@@ -2553,10 +2607,10 @@ function combinedStockByWood(){
   }).sort((a,b)=>a.wood.localeCompare(b.wood));
 }
 function renderLotsPage(){
-  const totalStock = DB.lots.reduce((s,l)=>s+(l.purchasedCFT-l.soldCFT),0);
+  const totalStock = SHARED.lots.reduce((s,l)=>s+(l.purchasedCFT-l.soldCFT),0);
   const combined = combinedStockByWood();
   return `
-  <div class="page-head"><div><div class="page-title">Timber Lots / Stock</div><div class="page-sub">${DB.lots.length} lots · ${numFmt(totalStock,2)} CFT on hand</div></div>
+  <div class="page-head"><div><div class="page-title">Timber Lots / Stock</div><div class="page-sub">${SHARED.lots.length} lots · ${numFmt(totalStock,2)} CFT on hand</div></div>
   <div style="display:flex;gap:8px;">
     <button class="btn" onclick="openExcelImportModal()">📊 Import from Excel</button>
     <button class="btn btn-primary" onclick="openLotForm()">+ New Lot</button>
@@ -2579,7 +2633,7 @@ function renderLotsPage(){
   <div class="tbl-wrap" style="border:none;"><table>
     <thead><tr><th>Lot No.</th><th>Wood</th><th>Warehouse</th><th class="num">Purchased CFT</th><th class="num">Sold CFT</th><th class="num">Balance CFT</th><th class="num">Avg Cost</th><th class="num">Stock Value</th><th></th></tr></thead>
     <tbody>
-    ${DB.lots.length?DB.lots.map(l=>{
+    ${SHARED.lots.length?SHARED.lots.map(l=>{
       const bal = round3(l.purchasedCFT-l.soldCFT);
       return `<tr><td class="mono">${esc(l.lotNo)}</td><td>${esc(l.wood)}</td><td>${esc(l.warehouse)||'Main'}</td>
       <td class="num mono">${numFmt(l.purchasedCFT,2)}</td><td class="num mono">${numFmt(l.soldCFT,2)}</td>
@@ -2596,7 +2650,7 @@ function deleteLot(id){
   if(used){ toast('⚠ Can\'t delete — this lot is used on a saved invoice/bill. Delete those first.'); return; }
   if(!confirm(`Move lot ${l.lotNo} (${l.wood}) to Trash?`)) return;
   softDeleteToTrash('lot', l, `${l.lotNo} — ${l.wood}`);
-  DB.lots = DB.lots.filter(x=>x.id!==id);
+  SHARED.lots = SHARED.lots.filter(x=>x.id!==id);
   persist(); toast('✓ Moved to Trash'); renderPage();
 }
 function openLotForm(existingId){
@@ -2606,7 +2660,7 @@ function openLotForm(existingId){
     <div class="modal">
       <div class="modal-head"><h3>${editing?'Edit':'New'} Timber Lot</h3><button class="close-x" onclick="closeModal()">✕</button></div>
       <div class="grid g2">
-        <div class="field"><label>Lot No.</label><input id="lf_no" value="${editing?esc(editing.lotNo):('LOT-'+String(DB.lots.length+1).padStart(3,'0'))}"></div>
+        <div class="field"><label>Lot No.</label><input id="lf_no" value="${editing?esc(editing.lotNo):('LOT-'+String(SHARED.lots.length+1).padStart(3,'0'))}"></div>
         <div class="field"><label>Wood / Species</label><input id="lf_wood" value="${editing?esc(editing.wood):''}" placeholder="Teak" list="wood-list-lot"><datalist id="wood-list-lot">${(DB.settings.species||[]).map(sp=>`<option value="${esc(sp)}">`).join('')}</datalist></div>
         <div class="field"><label>Warehouse</label><input id="lf_warehouse" value="${editing?esc(editing.warehouse||'Main'):'Main'}"></div>
         <div class="field"><label>Purchased CFT</label><input type="number" step="0.001" id="lf_purchased" value="${editing?editing.purchasedCFT:0}"></div>
@@ -2625,7 +2679,7 @@ function saveLot(existingId){
   const wood = v('lf_wood');
   if(!wood){ toast('Enter wood name'); return; }
   const data = {
-    lotNo: v('lf_no')||('LOT-'+(DB.lots.length+1)), wood,
+    lotNo: v('lf_no')||('LOT-'+(SHARED.lots.length+1)), wood,
     warehouse: v('lf_warehouse')||'Main',
     purchasedCFT: parseFloat(v('lf_purchased'))||0,
     soldCFT: parseFloat(v('lf_sold'))||0,
@@ -2634,7 +2688,7 @@ function saveLot(existingId){
   if(existingId){
     Object.assign(getLot(existingId), data);
   }else{
-    DB.lots.push({id:uid(), ...data});
+    SHARED.lots.push({id:uid(), ...data});
   }
   persist(); closeModal(); toast(existingId?'✓ Lot updated':'✓ Lot created'); renderPage();
 }
@@ -2752,11 +2806,11 @@ function runExcelImport(){
     const wood = mapping.wood!==null ? String(r[mapping.wood]||'').trim() : '';
     if(!wood){ skipped++; return; }
     const purchasedCFT = mapping.purchasedCFT!==null ? parseFloat(r[mapping.purchasedCFT])||0 : 0;
-    const lotNo = mapping.lotNo!==null && r[mapping.lotNo] ? String(r[mapping.lotNo]).trim() : ('LOT-'+String(DB.lots.length+1).padStart(3,'0'));
+    const lotNo = mapping.lotNo!==null && r[mapping.lotNo] ? String(r[mapping.lotNo]).trim() : ('LOT-'+String(SHARED.lots.length+1).padStart(3,'0'));
     const warehouse = mapping.warehouse!==null && r[mapping.warehouse] ? String(r[mapping.warehouse]).trim() : 'Main';
     const soldCFT = mapping.soldCFT!==null ? parseFloat(r[mapping.soldCFT])||0 : 0;
     const avgRate = mapping.avgRate!==null ? parseFloat(r[mapping.avgRate])||0 : 0;
-    DB.lots.push({id:uid(), lotNo, wood, warehouse, purchasedCFT, soldCFT, avgRate});
+    SHARED.lots.push({id:uid(), lotNo, wood, warehouse, purchasedCFT, soldCFT, avgRate});
     created++;
   });
   persist(); closeModal();
@@ -3118,7 +3172,7 @@ function saveCalcAsLot(){
       <div class="modal-head"><h3>Save Batch as New Lot</h3><button class="close-x" onclick="closeModal()">✕</button></div>
       <p class="page-sub" style="margin-top:-8px;">This adds ${numFmt(t.cft,3)} CFT (${numFmt(t.pieces,0)} pcs) to stock as a brand-new lot. It does not create a Purchase Bill or touch any ledger — use Purchase Bill instead if this timber came from a supplier you need to pay.</p>
       <div class="grid g2">
-        <div class="field"><label>Lot No.</label><input id="scl_no" value="LOT-${String(DB.lots.length+1).padStart(3,'0')}"></div>
+        <div class="field"><label>Lot No.</label><input id="scl_no" value="LOT-${String(SHARED.lots.length+1).padStart(3,'0')}"></div>
         <div class="field"><label>Wood / Species</label><input id="scl_wood" value="${esc(woodGuess)}" list="wood-list-calc"></div>
         <div class="field"><label>Warehouse</label><input id="scl_warehouse" value="Main"></div>
         <div class="field"><label>Avg. Cost per CFT (optional)</label><input type="number" id="scl_rate" placeholder="e.g. 2000"></div>
@@ -3135,7 +3189,7 @@ function confirmSaveCalcAsLot(cft){
   const wood = v('scl_wood');
   if(!wood){ toast('Enter a wood name'); return; }
   const rate = parseFloat(v('scl_rate'))||0;
-  DB.lots.push({id:uid(), lotNo:v('scl_no')||('LOT-'+(DB.lots.length+1)), wood,
+  SHARED.lots.push({id:uid(), lotNo:v('scl_no')||('LOT-'+(SHARED.lots.length+1)), wood,
     warehouse:v('scl_warehouse')||'Main', purchasedCFT:round3(cft), soldCFT:0, avgRate:rate});
   persist(); closeModal(); toast(`✓ Lot created with ${numFmt(cft,3)} CFT`);
   CALC_ITEMS = [blankCalcItem()];
@@ -3193,18 +3247,18 @@ function renderLedgerBody(){
    added or deleted, so nothing has to be saved by hand.
 ========================================================================= */
 function khataNames(){
-  const set = new Set((DB.khata||[]).map(e=>e.personName));
+  const set = new Set((SHARED.khata||[]).map(e=>e.personName));
   return Array.from(set).sort((a,b)=>a.localeCompare(b));
 }
 function khataSummary(name){
-  const mine = (DB.khata||[]).filter(e=>e.personName===name);
+  const mine = (SHARED.khata||[]).filter(e=>e.personName===name);
   const gave = sum(mine.filter(e=>e.type==='gave'), e=>e.amount);
   const got = sum(mine.filter(e=>e.type==='got'), e=>e.amount);
   return { gave, got, net: round2(gave-got), count: mine.length };
 }
 function renderKhataPage(){
   const names = khataNames();
-  const entries = DB.khata||[];
+  const entries = SHARED.khata||[];
   const totalGave = sum(entries.filter(e=>e.type==='gave'), e=>e.amount);
   const totalGot = sum(entries.filter(e=>e.type==='got'), e=>e.amount);
   const managerSet = new Set(managerNames());
@@ -3245,7 +3299,7 @@ function openKhataDetail(name){
 function renderKhataDetail(name){
   const box = document.getElementById('khata-detail');
   if(!box) return;
-  const mine = (DB.khata||[]).filter(e=>e.personName===name).sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id));
+  const mine = (SHARED.khata||[]).filter(e=>e.personName===name).sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id));
   let running=0;
   const withBal = mine.map(e=>{ running += (e.type==='gave'?e.amount:-e.amount); return {...e, balance: round2(running)}; });
   const s = khataSummary(name);
@@ -3278,7 +3332,7 @@ function renderKhataDetail(name){
 function openKhataEntryForm(prefillName, existingId){
   const names = khataNames();
   const managers = managerNames();
-  const editing = existingId ? (DB.khata||[]).find(x=>x.id===existingId) : null;
+  const editing = existingId ? (SHARED.khata||[]).find(x=>x.id===existingId) : null;
   const linked = !!(editing && editing.managerLedgerEntryId);
   const html = `
   <div class="modal-bg" onclick="if(event.target===this)closeModal()">
@@ -3322,58 +3376,58 @@ function saveKhataEntry(existingId){
   const note = v('kf_note');
   if(!name){ toast('Enter a name'); return; }
   if(amount<=0){ toast('Enter an amount'); return; }
-  if(!DB.khata) DB.khata = [];
+  if(!SHARED.khata) SHARED.khata = [];
   const linkChecked = document.getElementById('kf_linkmanager')?.checked;
   const managerName = linkChecked ? (v('kf_managername')||name) : null;
 
-  const editing = existingId ? DB.khata.find(x=>x.id===existingId) : null;
+  const editing = existingId ? SHARED.khata.find(x=>x.id===existingId) : null;
   let linkId = editing ? editing.managerLedgerEntryId : null;
 
   if(managerName){
     const mType = type==='gave' ? 'given' : 'returned';
     const ledgerNote = `Khata: ${note||(type==='gave'?'Money given':'Money received')}`;
     if(linkId){
-      const le = (DB.managerLedger||[]).find(x=>x.id===linkId);
+      const le = (SHARED.managerLedger||[]).find(x=>x.id===linkId);
       if(le){ Object.assign(le, {managerName, date, type:mType, amount, note:ledgerNote}); }
-      else{ const ne={id:uid(),managerName,date,type:mType,amount,note:ledgerNote,sourceKhataEntryId:existingId||null}; if(!DB.managerLedger)DB.managerLedger=[]; DB.managerLedger.push(ne); linkId=ne.id; }
+      else{ const ne={id:uid(),managerName,date,type:mType,amount,note:ledgerNote,sourceKhataEntryId:existingId||null}; if(!SHARED.managerLedger)SHARED.managerLedger=[]; SHARED.managerLedger.push(ne); linkId=ne.id; }
     }else{
       const ne = {id:uid(), managerName, date, type:mType, amount, note:ledgerNote, sourceKhataEntryId: existingId||null};
-      if(!DB.managerLedger) DB.managerLedger=[];
-      DB.managerLedger.push(ne);
+      if(!SHARED.managerLedger) SHARED.managerLedger=[];
+      SHARED.managerLedger.push(ne);
       linkId = ne.id;
     }
   }else if(linkId){
-    DB.managerLedger = (DB.managerLedger||[]).filter(x=>x.id!==linkId);
+    SHARED.managerLedger = (SHARED.managerLedger||[]).filter(x=>x.id!==linkId);
     linkId = null;
   }
 
   const data = {personName:name, date, type, amount, note, managerLedgerEntryId: linkId};
   if(existingId){
     Object.assign(editing, data);
-    if(linkId){ const le=(DB.managerLedger||[]).find(x=>x.id===linkId); if(le) le.sourceKhataEntryId = existingId; }
+    if(linkId){ const le=(SHARED.managerLedger||[]).find(x=>x.id===linkId); if(le) le.sourceKhataEntryId = existingId; }
   }else{
     const id = uid();
-    if(linkId){ const le=(DB.managerLedger||[]).find(x=>x.id===linkId); if(le) le.sourceKhataEntryId = id; }
-    DB.khata.push({id, ...data});
+    if(linkId){ const le=(SHARED.managerLedger||[]).find(x=>x.id===linkId); if(le) le.sourceKhataEntryId = id; }
+    SHARED.khata.push({id, ...data});
   }
   persist(); closeModal(); toast('✓ Entry saved — auto-saved to your PC');
   renderPage();
   setTimeout(()=>renderKhataDetail(name), 0);
 }
 function deleteKhataEntry(id){
-  const e = (DB.khata||[]).find(x=>x.id===id);
+  const e = (SHARED.khata||[]).find(x=>x.id===id);
   if(!e) return;
   if(!confirm('Delete this entry?'+(e.managerLedgerEntryId?' Its linked Manager Ledger entry will be removed too.':''))) return;
   const name = e.personName;
   if(e.managerLedgerEntryId){
-    DB.managerLedger = (DB.managerLedger||[]).filter(x=>x.id!==e.managerLedgerEntryId);
+    SHARED.managerLedger = (SHARED.managerLedger||[]).filter(x=>x.id!==e.managerLedgerEntryId);
   }
-  DB.khata = (DB.khata||[]).filter(x=>x.id!==id);
+  SHARED.khata = (SHARED.khata||[]).filter(x=>x.id!==id);
   persist(); toast('✓ Deleted'); renderPage();
   setTimeout(()=>renderKhataDetail(name), 0);
 }
 function printKhataStatement(name){
-  const mine = (DB.khata||[]).filter(e=>e.personName===name).sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id));
+  const mine = (SHARED.khata||[]).filter(e=>e.personName===name).sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id));
   let running=0;
   const withBal = mine.map(e=>{ running += (e.type==='gave'?e.amount:-e.amount); return {...e, balance: round2(running)}; });
   const s = khataSummary(name);
@@ -3443,11 +3497,11 @@ const MANAGER_ENTRY_TYPES = {
   other:    {label:'Other Expense',             sign:-1}
 };
 function managerNames(){
-  const set = new Set((DB.managerLedger||[]).map(e=>e.managerName));
+  const set = new Set((SHARED.managerLedger||[]).map(e=>e.managerName));
   return Array.from(set).sort((a,b)=>a.localeCompare(b));
 }
 function managerSummary(name){
-  const mine = (DB.managerLedger||[]).filter(e=>e.managerName===name);
+  const mine = (SHARED.managerLedger||[]).filter(e=>e.managerName===name);
   const given  = sum(mine.filter(e=>e.type==='given'),  e=>e.amount);
   const salary = sum(mine.filter(e=>e.type==='salary'), e=>e.amount);
   const rent   = sum(mine.filter(e=>e.type==='rent'),   e=>e.amount);
@@ -3459,7 +3513,7 @@ function managerSummary(name){
 }
 function renderManagerLedgerPage(){
   const names = managerNames();
-  const entries = DB.managerLedger||[];
+  const entries = SHARED.managerLedger||[];
   const totalGiven = sum(entries.filter(e=>e.type==='given'), e=>e.amount);
   const totalSalary = sum(entries.filter(e=>e.type==='salary'), e=>e.amount);
   const totalRent = sum(entries.filter(e=>e.type==='rent'), e=>e.amount);
@@ -3506,7 +3560,7 @@ function openManagerDetail(name){
 function renderManagerDetail(name){
   const box = document.getElementById('manager-detail');
   if(!box) return;
-  const mine = (DB.managerLedger||[]).filter(e=>e.managerName===name).sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id));
+  const mine = (SHARED.managerLedger||[]).filter(e=>e.managerName===name).sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id));
   let running=0;
   const withBal = mine.map(e=>{ running += (MANAGER_ENTRY_TYPES[e.type]?.sign||0)*e.amount; return {...e, balance: round2(running)}; });
   const s = managerSummary(name);
@@ -3535,7 +3589,7 @@ function renderManagerDetail(name){
 }
 function openManagerEntryForm(prefillName, existingId){
   const names = managerNames();
-  const editing = existingId ? (DB.managerLedger||[]).find(x=>x.id===existingId) : null;
+  const editing = existingId ? (SHARED.managerLedger||[]).find(x=>x.id===existingId) : null;
   if(editing && editing.sourceStockInId){
     toast('⚠ This entry comes from a Stock In record — edit or delete it from the "Stock In (KG)" page instead.');
     return;
@@ -3571,19 +3625,19 @@ function saveManagerEntry(existingId){
   const amount = parseFloat(v('mf_amount'))||0;
   if(!name){ toast('Enter a manager name'); return; }
   if(amount<=0){ toast('Enter an amount'); return; }
-  if(!DB.managerLedger) DB.managerLedger = [];
+  if(!SHARED.managerLedger) SHARED.managerLedger = [];
   if(existingId){
-    const e = DB.managerLedger.find(x=>x.id===existingId);
+    const e = SHARED.managerLedger.find(x=>x.id===existingId);
     Object.assign(e, {managerName:name, date:v('mf_date')||todayISO(), type:v('mf_type'), amount, note:v('mf_note')});
   }else{
-    DB.managerLedger.push({id:uid(), managerName:name, date:v('mf_date')||todayISO(), type:v('mf_type'), amount, note:v('mf_note')});
+    SHARED.managerLedger.push({id:uid(), managerName:name, date:v('mf_date')||todayISO(), type:v('mf_type'), amount, note:v('mf_note')});
   }
   persist(); closeModal(); toast('✓ Entry saved — auto-saved to your PC');
   renderPage();
   setTimeout(()=>renderManagerDetail(name), 0);
 }
 function deleteManagerEntry(id){
-  const e = (DB.managerLedger||[]).find(x=>x.id===id);
+  const e = (SHARED.managerLedger||[]).find(x=>x.id===id);
   if(!e) return;
   if(e.sourceStockInId){
     toast('⚠ This entry comes from a Stock In record — delete it from the "Stock In (KG)" page instead.');
@@ -3595,7 +3649,7 @@ function deleteManagerEntry(id){
   }
   if(!confirm('Delete this entry?')) return;
   const name = e.managerName;
-  DB.managerLedger = (DB.managerLedger||[]).filter(x=>x.id!==id);
+  SHARED.managerLedger = (SHARED.managerLedger||[]).filter(x=>x.id!==id);
   persist(); toast('✓ Deleted'); renderPage();
   setTimeout(()=>renderManagerDetail(name), 0);
 }
@@ -3610,7 +3664,7 @@ function deleteManagerEntry(id){
 ========================================================================= */
 function stockInGroups(){
   const map = {};
-  (DB.stockInKG||[]).forEach(e=>{
+  (SHARED.stockInKG||[]).forEach(e=>{
     const key = e.wood+'|||'+e.thickness;
     if(!map[key]) map[key] = {wood:e.wood, thickness:e.thickness, qty:0, amount:0};
     map[key].qty = round3(map[key].qty + e.qty);
@@ -3619,10 +3673,10 @@ function stockInGroups(){
   return Object.values(map).sort((a,b)=>a.wood.localeCompare(b.wood)||a.thickness.localeCompare(b.thickness));
 }
 function renderStockInPage(){
-  const list = (DB.stockInKG||[]).slice().sort((a,b)=>b.date.localeCompare(a.date)||b.id.localeCompare(a.id));
+  const list = (SHARED.stockInKG||[]).slice().sort((a,b)=>b.date.localeCompare(a.date)||b.id.localeCompare(a.id));
   const groups = stockInGroups();
-  const totalKG = round3(sum(DB.stockInKG||[], e=>e.qty));
-  const totalAmt = round2(sum(DB.stockInKG||[], e=>e.amount||0));
+  const totalKG = round3(sum(SHARED.stockInKG||[], e=>e.qty));
+  const totalAmt = round2(sum(SHARED.stockInKG||[], e=>e.amount||0));
   return `
   <div class="page-head">
     <div><div class="page-title">Stock In (KG)</div><div class="page-sub">Quick stock intake by wood + thickness, tracked in KG — separate from Timber Lots (CFT) used for billing</div></div>
@@ -3660,7 +3714,7 @@ function renderStockInPage(){
   </div>`;
 }
 function openStockInForm(existingId){
-  const editing = existingId ? (DB.stockInKG||[]).find(x=>x.id===existingId) : null;
+  const editing = existingId ? (SHARED.stockInKG||[]).find(x=>x.id===existingId) : null;
   const managers = managerNames();
   const html = `
   <div class="modal-bg" onclick="if(event.target===this)closeModal()">
@@ -3703,48 +3757,48 @@ function saveStockInEntry(existingId){
   const date = v('si_date')||todayISO();
   const note = v('si_note');
 
-  const editing = existingId ? (DB.stockInKG||[]).find(x=>x.id===existingId) : null;
+  const editing = existingId ? (SHARED.stockInKG||[]).find(x=>x.id===existingId) : null;
   let linkId = editing ? editing.managerLedgerEntryId : null;
 
   // sync the linked manager-ledger "stock" entry
   if(managerName && amount>0){
     const ledgerNote = `Stock: ${wood} ${thickness} (${numFmt(qty,2)} kg)${note?' — '+note:''}`;
     if(linkId){
-      const le = (DB.managerLedger||[]).find(x=>x.id===linkId);
+      const le = (SHARED.managerLedger||[]).find(x=>x.id===linkId);
       if(le){ Object.assign(le, {managerName, date, amount, note:ledgerNote}); }
-      else { const ne={id:uid(),managerName,date,type:'stock',amount,note:ledgerNote,sourceStockInId:existingId||null}; DB.managerLedger.push(ne); linkId=ne.id; }
+      else { const ne={id:uid(),managerName,date,type:'stock',amount,note:ledgerNote,sourceStockInId:existingId||null}; SHARED.managerLedger.push(ne); linkId=ne.id; }
     }else{
       const ne = {id:uid(), managerName, date, type:'stock', amount, note:ledgerNote, sourceStockInId: existingId||null};
-      if(!DB.managerLedger) DB.managerLedger=[];
-      DB.managerLedger.push(ne);
+      if(!SHARED.managerLedger) SHARED.managerLedger=[];
+      SHARED.managerLedger.push(ne);
       linkId = ne.id;
     }
   }else if(linkId){
     // manager or amount removed — drop the linked ledger entry
-    DB.managerLedger = (DB.managerLedger||[]).filter(x=>x.id!==linkId);
+    SHARED.managerLedger = (SHARED.managerLedger||[]).filter(x=>x.id!==linkId);
     linkId = null;
   }
 
   const data = {wood, thickness, qty, rate, amount, managerName, date, note, managerLedgerEntryId: linkId};
   if(existingId){
     Object.assign(editing, data);
-    if(linkId){ const le=(DB.managerLedger||[]).find(x=>x.id===linkId); if(le) le.sourceStockInId = existingId; }
+    if(linkId){ const le=(SHARED.managerLedger||[]).find(x=>x.id===linkId); if(le) le.sourceStockInId = existingId; }
   }else{
-    if(!DB.stockInKG) DB.stockInKG = [];
+    if(!SHARED.stockInKG) SHARED.stockInKG = [];
     const id = uid();
-    if(linkId){ const le=(DB.managerLedger||[]).find(x=>x.id===linkId); if(le) le.sourceStockInId = id; }
-    DB.stockInKG.push({id, ...data});
+    if(linkId){ const le=(SHARED.managerLedger||[]).find(x=>x.id===linkId); if(le) le.sourceStockInId = id; }
+    SHARED.stockInKG.push({id, ...data});
   }
   persist(); closeModal(); toast('✓ Stock in saved — auto-saved to your PC'); renderPage();
 }
 function deleteStockInEntry(id){
-  const e = (DB.stockInKG||[]).find(x=>x.id===id);
+  const e = (SHARED.stockInKG||[]).find(x=>x.id===id);
   if(!e) return;
   if(!confirm('Delete this stock-in entry?')) return;
   if(e.managerLedgerEntryId){
-    DB.managerLedger = (DB.managerLedger||[]).filter(x=>x.id!==e.managerLedgerEntryId);
+    SHARED.managerLedger = (SHARED.managerLedger||[]).filter(x=>x.id!==e.managerLedgerEntryId);
   }
-  DB.stockInKG = (DB.stockInKG||[]).filter(x=>x.id!==id);
+  SHARED.stockInKG = (SHARED.stockInKG||[]).filter(x=>x.id!==id);
   persist(); toast('✓ Deleted'); renderPage();
 }
 
@@ -3922,7 +3976,7 @@ function computeGstSummary(){
 ========================================================================= */
 function renderStockValuationPage(){
   const rows = combinedStockByWood().map(r=>{
-    const lotsForWood = DB.lots.filter(l=>l.wood===r.wood);
+    const lotsForWood = SHARED.lots.filter(l=>l.wood===r.wood);
     const remainingCFT = lotsForWood.reduce((s,l)=>s+(l.purchasedCFT-l.soldCFT),0);
     const costOfRemaining = lotsForWood.reduce((s,l)=>s+Math.max(l.purchasedCFT-l.soldCFT,0)*(l.avgRate||0),0);
     const avgRate = remainingCFT>0 ? costOfRemaining/remainingCFT : 0;
@@ -4358,7 +4412,7 @@ function doSearch(qRaw){
 
   const invMatches = (DB.vouchers||[]).filter(v=>(v.number||'').toLowerCase().includes(q)).slice(0,5);
   const partyMatches = (DB.parties||[]).filter(p=>(p.name||'').toLowerCase().includes(q) || (p.mobile||'').includes(q) || (p.gstin||'').toLowerCase().includes(q)).slice(0,5);
-  const lotMatches = (DB.lots||[]).filter(l=>(l.lotNo||'').toLowerCase().includes(q) || (l.wood||'').toLowerCase().includes(q)).slice(0,5);
+  const lotMatches = (SHARED.lots||[]).filter(l=>(l.lotNo||'').toLowerCase().includes(q) || (l.wood||'').toLowerCase().includes(q)).slice(0,5);
 
   if(!invMatches.length && !partyMatches.length && !lotMatches.length){
     box.style.display='block';
@@ -4424,7 +4478,7 @@ async function bootApp(){
 })();
 
 function maybeRemindBackup(){
-  const hasData = (DB.parties.length + DB.vouchers.length + DB.lots.length) > 0;
+  const hasData = (DB.parties.length + DB.vouchers.length + SHARED.lots.length) > 0;
   if(!hasData) return;
   const last = localStorage.getItem(BACKUP_KEY);
   const daysSince = last ? (Date.now()-new Date(last).getTime())/86400000 : Infinity;
