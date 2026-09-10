@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Sawmill — Timber Trading ERP</title>
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#1f2937">
@@ -316,17 +316,98 @@ tr:last-child td{border-bottom:none;}
 .login-toggle{margin-top:16px;text-align:center;font-size:12.5px;color:var(--ink-soft);}
 .login-toggle a{color:var(--copper-deep);cursor:pointer;font-weight:600;}
 .login-logout{display:inline-flex;align-items:center;gap:6px;cursor:pointer;}
+
+/* =========================================================================
+   MOBILE / RESPONSIVE
+   Desktop keeps the fixed sidebar + centered modals. Below 900px the
+   sidebar becomes a slide-in drawer behind a hamburger button; below
+   640px the topbar stacks, modals become full-screen sheets, the
+   primary action moves to a floating button, and grids/forms go
+   single-column with touch-sized targets.
+========================================================================= */
+#hamburger{display:none;font-size:17px;padding:6px 10px;flex-shrink:0;}
+#brand{position:relative;}
+#sidebar-close{
+  display:none;position:absolute;top:16px;right:10px;background:none;border:none;
+  color:#d9cfbe;font-size:18px;line-height:1;cursor:pointer;padding:6px 8px;border-radius:6px;
+}
+#sidebar-close:hover{background:rgba(233,224,210,0.1);}
+#sidebar-backdrop{display:none;position:fixed;inset:0;background:rgba(36,28,22,.5);z-index:250;}
+.fab{
+  display:none;position:fixed;right:18px;bottom:calc(18px + env(safe-area-inset-bottom));
+  width:56px;height:56px;border-radius:50%;background:linear-gradient(160deg,var(--copper),var(--copper-deep));
+  color:#fff;border:none;box-shadow:0 6px 20px rgba(143,79,40,.45);font-size:28px;line-height:1;
+  align-items:center;justify-content:center;cursor:pointer;z-index:220;
+}
+.fab:active{transform:scale(.94);}
+
+@media (max-width:900px){
+  #hamburger{display:inline-flex;}
+  #sidebar-close{display:inline-flex;}
+  #sidebar{
+    position:fixed;top:0;left:0;bottom:0;width:82%;max-width:300px;z-index:300;
+    transform:translateX(-100%);transition:transform .25s ease;box-shadow:0 0 40px rgba(0,0,0,.35);
+    padding-top:env(safe-area-inset-top);
+  }
+  body.sidebar-open #sidebar{transform:translateX(0);}
+  body.sidebar-open #sidebar-backdrop{display:block;}
+  body.sidebar-open{overflow:hidden;}
+
+  .grid.g4{grid-template-columns:repeat(2,1fr);}
+  .grid.g3{grid-template-columns:repeat(2,1fr);}
+}
+
+@media (max-width:640px){
+  #content{padding:14px 14px 90px;}
+  .page-head{flex-wrap:wrap;row-gap:10px;align-items:flex-start;}
+  .page-title{font-size:20px;}
+  .grid.g4,.grid.g3,.grid.g2{grid-template-columns:1fr;}
+  .row{flex-direction:column;gap:0;}
+  .totals-box{width:100%;}
+
+  /* Topbar: hamburger + company switcher on row one, search drops to
+     its own full-width row, the desktop primary button is replaced
+     by the floating action button below. */
+  #topbar{flex-wrap:wrap;height:auto;min-height:56px;padding:10px 12px;row-gap:8px;}
+  #topbar > button.btn-primary{display:none;}
+  #search-wrap{order:5;flex-basis:100%;}
+  #tb-user{display:none;}
+  #topbar .fy{display:none;}
+  .fab{display:flex;}
+
+  /* Modals become full-screen sheets instead of centered cards */
+  .modal-bg{padding:0;align-items:stretch;}
+  .modal,.modal.wide{max-width:100%;width:100%;min-height:100%;border-radius:0;padding:16px;padding-bottom:calc(24px + env(safe-area-inset-bottom));}
+  .modal-head{position:sticky;top:-16px;margin:-16px -16px 14px;padding:14px 16px;background:#fff;z-index:5;}
+
+  /* Data tables: denser, with the first column pinned while the rest
+     scrolls horizontally so row identity stays visible. */
+  th,td{padding:8px;font-size:12.5px;}
+  .tbl-wrap table:not(.items-table) th:first-child,
+  .tbl-wrap table:not(.items-table) td:first-child{
+    position:sticky;left:0;background:var(--paper-2);box-shadow:2px 0 4px rgba(36,28,22,.06);
+  }
+  .tbl-wrap table:not(.items-table) tbody td:first-child{background:#fff;}
+
+  /* Touch targets + prevent iOS auto-zoom on focus (needs >=16px) */
+  .nav-item{padding:12px;font-size:14.5px;min-height:22px;}
+  .btn{min-height:38px;}
+  input,select,textarea{font-size:16px;}
+  .items-table input,.items-table select,.dim-cell input,.dim-cell select{font-size:12.5px;}
+}
 </style>
 </head>
 <body>
 
 <div id="login-root" style="display:none;"></div>
 
+<div id="sidebar-backdrop" onclick="closeSidebarMobile()"></div>
 <div id="shell">
   <aside id="sidebar">
     <div id="brand">
       <span class="mark">S</span><span class="name">Sawmill</span>
       <div class="tag">Timber ERP</div>
+      <button id="sidebar-close" onclick="closeSidebarMobile()" aria-label="Close menu">✕</button>
     </div>
     <nav id="nav"></nav>
     <div id="sidebar-foot">Company: <span id="foot-co">Not set</span></div>
@@ -334,12 +415,13 @@ tr:last-child td{border-bottom:none;}
 
   <div id="main">
     <div id="topbar">
+      <button id="hamburger" class="btn btn-ghost" onclick="toggleSidebar()" aria-label="Open menu">☰</button>
       <div style="position:relative;">
         <button class="co-switch" id="tb-co" onclick="toggleCompanyDropdown()">— <span class="caret">▾</span></button>
         <div id="company-dropdown" class="company-dropdown" style="display:none;"></div>
       </div>
       <span class="fy" id="tb-fy">FY —</span>
-      <div style="position:relative;flex:1;">
+      <div id="search-wrap" style="position:relative;flex:1;">
         <input id="search" placeholder="Search invoice, party, lot, phone…" oninput="doSearch(this.value)" onblur="setTimeout(closeSearchResults,150)">
         <div id="search-results" class="company-dropdown" style="display:none;"></div>
       </div>
@@ -349,6 +431,8 @@ tr:last-child td{border-bottom:none;}
     <div id="content"></div>
   </div>
 </div>
+
+<button class="fab" onclick="openSalesForm()" aria-label="New Sales Invoice">+</button>
 
 <div id="modal-root"></div>
 <div id="print-root"></div>
@@ -883,7 +967,12 @@ function go(route){
   ROUTE = route;
   renderNav();
   renderPage();
+  closeSidebarMobile();
 }
+
+/* ---------- Mobile drawer ---------- */
+function toggleSidebar(){ document.body.classList.toggle('sidebar-open'); }
+function closeSidebarMobile(){ document.body.classList.remove('sidebar-open'); }
 
 /* =========================================================================
    RENDER ROUTER
@@ -1630,6 +1719,17 @@ function saveParty(type, id){
 }
 
 function closeModal(){ document.getElementById('modal-root').innerHTML=''; }
+
+/* Lock background scroll whenever a modal (any of them — they all
+   render into #modal-root) is open, mainly so full-screen mobile
+   sheets don't let the page scroll underneath them. */
+(function(){
+  const mr = document.getElementById('modal-root');
+  if(!mr) return;
+  new MutationObserver(()=>{
+    document.body.style.overflow = mr.innerHTML.trim() ? 'hidden' : '';
+  }).observe(mr, {childList:true});
+})();
 
 /* =========================================================================
    TIMBER ITEM ROW BUILDER (shared by sales & purchase forms)
