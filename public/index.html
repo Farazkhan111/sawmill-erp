@@ -2631,16 +2631,18 @@ function renderLotsPage(){
   </div>
   <div class="card" style="padding:0;">
   <div class="tbl-wrap" style="border:none;"><table>
-    <thead><tr><th>Lot No.</th><th>Wood</th><th>Warehouse</th><th class="num">Purchased CFT</th><th class="num">Sold CFT</th><th class="num">Balance CFT</th><th class="num">Avg Cost</th><th class="num">Stock Value</th><th>Manager</th><th></th></tr></thead>
+    <thead><tr><th>Lot No.</th><th>Wood</th><th>Warehouse</th><th class="num">Purchased CFT</th><th class="num">Sold CFT</th><th class="num">Balance CFT</th><th class="num">Avg Cost</th><th class="num">Stock Value</th><th class="num">Amount (Manager)</th><th class="num">Bhada</th><th>Manager</th><th></th></tr></thead>
     <tbody>
     ${SHARED.lots.length?SHARED.lots.map(l=>{
       const bal = round3(l.purchasedCFT-l.soldCFT);
       return `<tr><td class="mono">${esc(l.lotNo)}</td><td>${esc(l.wood)}</td><td>${esc(l.warehouse)||'Main'}</td>
       <td class="num mono">${numFmt(l.purchasedCFT,2)}</td><td class="num mono">${numFmt(l.soldCFT,2)}</td>
       <td class="num mono" style="font-weight:700;">${numFmt(bal,2)}</td><td class="num mono">${money(l.avgRate)}</td><td class="num mono">${money(bal*l.avgRate)}</td>
-      <td>${l.managerName?`<a href="#" onclick="event.preventDefault();openManagerDetail('${esc(l.managerName).replace(/'/g,"\\'")}')" style="color:var(--copper-deep);text-decoration:none;">${esc(l.managerName)}</a>`:'—'}</td>
+      <td class="num mono">${l.amount?money(l.amount):'—'}</td>
+      <td class="num mono">${l.bhada?money(l.bhada):'—'}</td>
+      <td>${l.managerName?`<a href="#" onclick="event.preventDefault();openManagerDetail('${esc(l.managerName).replace(/'/g,"\\'")}')" style="color:var(--copper-deep);text-decoration:none;">${esc(l.managerName)}${l.amount?` (${money(l.amount)})`:''}</a>`:'—'}</td>
       <td style="white-space:nowrap;"><button class="btn btn-sm btn-ghost" onclick="openLotForm('${l.id}')">Edit</button><button class="btn btn-sm btn-ghost btn-danger" onclick="deleteLot('${l.id}')">Delete</button></td></tr>`;
-    }).join(''):'<tr><td colspan="10" class="empty">No lots yet — create one, add via a Purchase Bill, or import from Excel.</td></tr>'}
+    }).join(''):'<tr><td colspan="12" class="empty">No lots yet — create one, add via a Purchase Bill, or import from Excel.</td></tr>'}
     </tbody>
   </table></div></div>`;
 }
@@ -2658,6 +2660,7 @@ function deleteLot(id){
 function openLotForm(existingId){
   const editing = existingId ? getLot(existingId) : null;
   const managers = managerNames();
+  const defaultAmount = editing ? (editing.amount!=null?editing.amount:round2(editing.purchasedCFT*editing.avgRate)) : '';
   const html = `
   <div class="modal-bg" onclick="if(event.target===this)closeModal()">
     <div class="modal">
@@ -2666,12 +2669,14 @@ function openLotForm(existingId){
         <div class="field"><label>Lot No.</label><input id="lf_no" value="${editing?esc(editing.lotNo):('LOT-'+String(SHARED.lots.length+1).padStart(3,'0'))}"></div>
         <div class="field"><label>Wood / Species</label><input id="lf_wood" value="${editing?esc(editing.wood):''}" placeholder="Teak" list="wood-list-lot"><datalist id="wood-list-lot">${(DB.settings.species||[]).map(sp=>`<option value="${esc(sp)}">`).join('')}</datalist></div>
         <div class="field"><label>Warehouse</label><input id="lf_warehouse" value="${editing?esc(editing.warehouse||'Main'):'Main'}"></div>
-        <div class="field"><label>Purchased CFT</label><input type="number" step="0.001" id="lf_purchased" value="${editing?editing.purchasedCFT:0}"></div>
+        <div class="field"><label>Purchased CFT</label><input type="number" step="0.001" id="lf_purchased" value="${editing?editing.purchasedCFT:0}" oninput="updateLotAmount()"></div>
         <div class="field"><label>Sold CFT</label><input type="number" step="0.001" id="lf_sold" value="${editing?editing.soldCFT:0}"></div>
-        <div class="field"><label>Avg Cost ₹ / CFT</label><input type="number" step="0.01" id="lf_avgrate" value="${editing?editing.avgRate:0}"></div>
+        <div class="field"><label>Avg Cost ₹ / CFT</label><input type="number" step="0.01" id="lf_avgrate" value="${editing?editing.avgRate:0}" oninput="updateLotAmount()"></div>
+        <div class="field"><label>Amount ₹ (auto, editable)</label><input type="number" step="0.01" id="lf_amount" value="${defaultAmount}" placeholder="0.00"></div>
+        <div class="field"><label>Bhada / Transport ₹ (optional)</label><input type="number" step="0.01" id="lf_bhada" value="${editing?(editing.bhada||''):''}" placeholder="0.00"></div>
         <div class="field" style="grid-column:1/-1;"><label>Purchased Via (Manager, optional)</label><input id="lf_manager" value="${editing?esc(editing.managerName||''):''}" placeholder="e.g. Ramesh (Site Manager)" list="manager-name-list-lot"><datalist id="manager-name-list-lot">${managers.map(n=>`<option value="${esc(n)}">`).join('')}</datalist></div>
       </div>
-      <p class="page-sub" style="margin:-4px 0 12px;">If you enter a manager, the stock value (Purchased CFT × Avg Cost) counts as them paying you back in stock — it's logged as "Money Returned by Manager" on their Manager Ledger, and as money you received under their name in the Khata Book.</p>
+      <p class="page-sub" style="margin:-4px 0 12px;">If you enter a manager, the <b>Amount</b> above counts as them paying you back in stock — it's logged as "Money Returned by Manager" on their Manager Ledger, and as money you received under their name in the Khata Book. <b>Bhada</b> (truck/delivery charge) is tracked separately and is never included in that amount.</p>
       <div style="display:flex;gap:8px;justify-content:flex-end;">
         <button class="btn" onclick="closeModal()">Cancel</button>
         <button class="btn btn-primary" onclick="saveLot(${editing?`'${existingId}'`:'null'})">${editing?'Save Changes':'Create Lot'}</button>
@@ -2680,11 +2685,18 @@ function openLotForm(existingId){
   </div>`;
   document.getElementById('modal-root').innerHTML = html;
 }
+function updateLotAmount(){
+  const cft = parseFloat(v('lf_purchased'))||0;
+  const rate = parseFloat(v('lf_avgrate'))||0;
+  if(cft && rate) document.getElementById('lf_amount').value = round2(cft*rate);
+}
 function saveLot(existingId){
   const wood = v('lf_wood');
   if(!wood){ toast('Enter wood name'); return; }
   const purchasedCFT = parseFloat(v('lf_purchased'))||0;
   const avgRate = parseFloat(v('lf_avgrate'))||0;
+  const amount = parseFloat(v('lf_amount'))||0;
+  const bhada = parseFloat(v('lf_bhada'))||0;
   const managerName = v('lf_manager');
   const editing = existingId ? getLot(existingId) : null;
   const data = {
@@ -2693,11 +2705,13 @@ function saveLot(existingId){
     purchasedCFT,
     soldCFT: parseFloat(v('lf_sold'))||0,
     avgRate,
+    amount,
+    bhada,
     managerName
   };
   const id = existingId || uid();
   const links = syncStockManagerAndKhata({
-    managerName, amount: round2(purchasedCFT*avgRate), date: todayISO(),
+    managerName, amount, date: todayISO(),
     note: `Stock: Lot ${data.lotNo} — ${wood} (${numFmt(purchasedCFT,2)} CFT)`,
     source: {field:'sourceLotId', id},
     links: editing ? {managerLedgerEntryId: editing.managerLedgerEntryId, khataEntryId: editing.khataEntryId} : null
@@ -3787,6 +3801,7 @@ function renderStockInPage(){
   const groups = stockInGroups();
   const totalKG = round3(sum(SHARED.stockInKG||[], e=>e.qty));
   const totalAmt = round2(sum(SHARED.stockInKG||[], e=>e.amount||0));
+  const totalBhada = round2(sum(SHARED.stockInKG||[], e=>e.bhada||0));
   return `
   <div class="page-head">
     <div><div class="page-title">Stock In (KG)</div><div class="page-sub">Quick stock intake by wood + thickness, tracked in KG — separate from Timber Lots (CFT) used for billing</div></div>
@@ -3795,7 +3810,7 @@ function renderStockInPage(){
   <div class="grid g3" style="margin-bottom:16px;">
     <div class="stat pos"><div class="label">Total Stock In</div><div class="value">${numFmt(totalKG,2)} kg</div></div>
     <div class="stat"><div class="label">Total Value</div><div class="value">${money(totalAmt)}</div></div>
-    <div class="stat"><div class="label">Wood + Thickness Combos</div><div class="value">${groups.length}</div></div>
+    <div class="stat"><div class="label">Total Bhada Paid</div><div class="value">${money(totalBhada)}</div></div>
   </div>
   <div class="card">
     <div class="card-title">On Hand by Wood &amp; Thickness</div>
@@ -3808,7 +3823,7 @@ function renderStockInPage(){
   <div class="card">
     <div class="card-title">Stock In History</div>
     <div class="tbl-wrap">
-    <table><thead><tr><th>Date</th><th>Wood</th><th>Thickness</th><th class="num">Qty (kg)</th><th class="num">Rate/kg</th><th class="num">Amount</th><th>Manager</th><th>Note</th><th></th></tr></thead>
+    <table><thead><tr><th>Date</th><th>Wood</th><th>Thickness</th><th class="num">Qty (kg)</th><th class="num">Rate/kg</th><th class="num">Amount</th><th class="num">Bhada</th><th>Manager</th><th>Note</th><th></th></tr></thead>
     <tbody>${list.length?list.map(e=>`<tr>
       <td>${fmtDate(e.date)}</td>
       <td>${esc(e.wood)}</td>
@@ -3816,10 +3831,11 @@ function renderStockInPage(){
       <td class="num mono">${numFmt(e.qty,2)}</td>
       <td class="num mono">${e.rate?money(e.rate):'—'}</td>
       <td class="num mono">${e.amount?money(e.amount):'—'}</td>
-      <td>${e.managerName?`<a href="#" onclick="event.preventDefault();openManagerDetail('${esc(e.managerName).replace(/'/g,"\\'")}')" style="color:var(--copper-deep);text-decoration:none;">${esc(e.managerName)}</a>`:'—'}</td>
+      <td class="num mono">${e.bhada?money(e.bhada):'—'}</td>
+      <td>${e.managerName?`<a href="#" onclick="event.preventDefault();openManagerDetail('${esc(e.managerName).replace(/'/g,"\\'")}')" style="color:var(--copper-deep);text-decoration:none;">${esc(e.managerName)}${e.amount?` (${money(e.amount)})`:''}</a>`:'—'}</td>
       <td>${esc(e.note||'—')}</td>
       <td style="white-space:nowrap;"><button class="btn btn-sm btn-ghost" onclick="openStockInForm('${e.id}')">Edit</button><button class="btn btn-sm btn-ghost btn-danger" onclick="deleteStockInEntry('${e.id}')">Delete</button></td>
-    </tr>`).join(''):'<tr><td colspan="9" class="empty">No stock-in entries yet — click "+ New Stock In" to add the first one.</td></tr>'}</tbody></table>
+    </tr>`).join(''):'<tr><td colspan="10" class="empty">No stock-in entries yet — click "+ New Stock In" to add the first one.</td></tr>'}</tbody></table>
     </div>
   </div>`;
 }
@@ -3837,10 +3853,11 @@ function openStockInForm(existingId){
         <div class="field"><label>Rate ₹ / kg (optional)</label><input type="number" step="0.01" id="si_rate" value="${editing?(editing.rate||''):''}" placeholder="0.00" oninput="updateStockInAmount()"></div>
         <div class="field"><label>Date</label><input type="date" id="si_date" value="${editing?editing.date:todayISO()}"></div>
         <div class="field"><label>Amount ₹ (auto, editable)</label><input type="number" step="0.01" id="si_amount" value="${editing?(editing.amount||''):''}" placeholder="0.00"></div>
+        <div class="field"><label>Bhada / Transport ₹ (optional)</label><input type="number" step="0.01" id="si_bhada" value="${editing?(editing.bhada||''):''}" placeholder="0.00"></div>
         <div class="field" style="grid-column:1/-1;"><label>Purchased Via (Manager)</label><input id="si_manager" value="${editing?esc(editing.managerName||''):''}" placeholder="e.g. Ramesh (Site Manager)" list="manager-name-list-stockin"><datalist id="manager-name-list-stockin">${managers.map(n=>`<option value="${esc(n)}">`).join('')}</datalist></div>
         <div class="field" style="grid-column:1/-1;"><label>Note (optional)</label><input id="si_note" value="${editing?esc(editing.note||''):''}" placeholder="e.g. Truck no., supplier contact..."></div>
       </div>
-      <p class="page-sub" style="margin:-4px 0 12px;">If you enter a manager and amount, it counts as them paying you back in stock — it's logged as "Money Returned by Manager" on their Manager Ledger, and as money you received under their name in the Khata Book.</p>
+      <p class="page-sub" style="margin:-4px 0 12px;">If you enter a manager and amount, it counts as them paying you back in stock — it's logged as "Money Returned by Manager" on their Manager Ledger, and as money you received under their name in the Khata Book. <b>Bhada</b> (truck/delivery charge) is tracked separately and is never included in that amount.</p>
       <div style="display:flex;gap:8px;justify-content:flex-end;">
         <button class="btn" onclick="closeModal()">Cancel</button>
         <button class="btn btn-primary" onclick="saveStockInEntry(${editing?`'${existingId}'`:'null'})">Save</button>
@@ -3863,6 +3880,7 @@ function saveStockInEntry(existingId){
   if(qty<=0){ toast('Enter quantity in kg'); return; }
   const rate = parseFloat(v('si_rate'))||0;
   const amount = parseFloat(v('si_amount'))||0;
+  const bhada = parseFloat(v('si_bhada'))||0;
   const managerName = v('si_manager');
   const date = v('si_date')||todayISO();
   const note = v('si_note');
@@ -3877,7 +3895,7 @@ function saveStockInEntry(existingId){
     links: editing ? {managerLedgerEntryId: editing.managerLedgerEntryId, khataEntryId: editing.khataEntryId} : null
   });
 
-  const data = {wood, thickness, qty, rate, amount, managerName, date, note, ...links};
+  const data = {wood, thickness, qty, rate, amount, bhada, managerName, date, note, ...links};
   if(existingId){
     Object.assign(editing, data);
   }else{
