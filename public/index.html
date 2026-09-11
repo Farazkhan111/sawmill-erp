@@ -2671,7 +2671,7 @@ function openLotForm(existingId){
         <div class="field"><label>Avg Cost ₹ / CFT</label><input type="number" step="0.01" id="lf_avgrate" value="${editing?editing.avgRate:0}"></div>
         <div class="field" style="grid-column:1/-1;"><label>Purchased Via (Manager, optional)</label><input id="lf_manager" value="${editing?esc(editing.managerName||''):''}" placeholder="e.g. Ramesh (Site Manager)" list="manager-name-list-lot"><datalist id="manager-name-list-lot">${managers.map(n=>`<option value="${esc(n)}">`).join('')}</datalist></div>
       </div>
-      <p class="page-sub" style="margin:-4px 0 12px;">If you enter a manager, the stock value (Purchased CFT × Avg Cost) is automatically logged as a "Stock Purchased" spend on their Manager Ledger, and as an entry under their name in the Khata Book.</p>
+      <p class="page-sub" style="margin:-4px 0 12px;">If you enter a manager, the stock value (Purchased CFT × Avg Cost) counts as them paying you back in stock — it's logged as "Money Returned by Manager" on their Manager Ledger, and as money you received under their name in the Khata Book.</p>
       <div style="display:flex;gap:8px;justify-content:flex-end;">
         <button class="btn" onclick="closeModal()">Cancel</button>
         <button class="btn btn-primary" onclick="saveLot(${editing?`'${existingId}'`:'null'})">${editing?'Save Changes':'Create Lot'}</button>
@@ -3197,7 +3197,7 @@ function saveCalcAsLot(){
         <div class="field"><label>Avg. Cost per CFT (optional)</label><input type="number" id="scl_rate" placeholder="e.g. 2000"></div>
         <div class="field" style="grid-column:1/-1;"><label>Purchased Via (Manager, optional)</label><input id="scl_manager" placeholder="e.g. Ramesh (Site Manager)" list="manager-name-list-calc"><datalist id="manager-name-list-calc">${managers.map(n=>`<option value="${esc(n)}">`).join('')}</datalist></div>
       </div>
-      <p class="page-sub" style="margin:-4px 0 12px;">If you enter a manager, the stock value (CFT × Avg. Cost) is logged as a "Stock Purchased" spend on their Manager Ledger, and as an entry under their name in the Khata Book.</p>
+      <p class="page-sub" style="margin:-4px 0 12px;">If you enter a manager, the stock value (CFT × Avg. Cost) counts as them paying you back in stock — it's logged as "Money Returned by Manager" on their Manager Ledger, and as money you received under their name in the Khata Book.</p>
       <div style="display:flex;gap:8px;justify-content:flex-end;">
         <button class="btn" onclick="closeModal()">Cancel</button>
         <button class="btn btn-primary" onclick="confirmSaveCalcAsLot(${t.cft})">Create Lot</button>
@@ -3551,18 +3551,30 @@ const MANAGER_ENTRY_TYPES = {
 // this stock record instead of letting themselves drift out of sync).
 // Returns the {managerLedgerEntryId, khataEntryId} to store back on the
 // stock record; pass the previous values in via `links` when editing.
+// Keeps a Manager Ledger entry AND a Khata Book entry in sync with a stock
+// record (a Timber Lot or a Stock In (KG) entry) that names a manager and a
+// cost. Adding stock through a manager is treated as the manager PAYING YOU
+// BACK — in stock form — money that was with them: it shows as "Money
+// Returned by Manager" on the Manager Ledger (reduces what's still with
+// them) and as "I Received" in the Khata Book (reduces what they owe you).
+// Called every time such a stock record is saved. `source` identifies where
+// the money-back came from, so the two generated entries link back to it
+// (and Edit/Delete on the Manager Ledger / Khata Book pages redirect to
+// this stock record instead of letting themselves drift out of sync).
+// Returns the {managerLedgerEntryId, khataEntryId} to store back on the
+// stock record; pass the previous values in via `links` when editing.
 function syncStockManagerAndKhata({managerName, amount, date, note, source, links}){
   let mlId = (links && links.managerLedgerEntryId) || null;
   let khId = (links && links.khataEntryId) || null;
   if(managerName && amount>0){
     if(!SHARED.managerLedger) SHARED.managerLedger = [];
     if(!SHARED.khata) SHARED.khata = [];
-    const mlData = {managerName, date, type:'stock', amount, note, [source.field]: source.id};
+    const mlData = {managerName, date, type:'returned', amount, note, [source.field]: source.id};
     const existingMl = mlId ? SHARED.managerLedger.find(x=>x.id===mlId) : null;
     if(existingMl){ Object.assign(existingMl, mlData); }
     else{ const ne={id:uid(), ...mlData}; SHARED.managerLedger.push(ne); mlId = ne.id; }
 
-    const khData = {personName:managerName, date, type:'gave', amount, note, [source.field]: source.id, managerLedgerEntryId: mlId};
+    const khData = {personName:managerName, date, type:'got', amount, note, [source.field]: source.id, managerLedgerEntryId: mlId};
     const existingKh = khId ? SHARED.khata.find(x=>x.id===khId) : null;
     if(existingKh){ Object.assign(existingKh, khData); }
     else{ const ne={id:uid(), ...khData}; SHARED.khata.push(ne); khId = ne.id; }
@@ -3605,8 +3617,9 @@ function renderManagerLedgerPage(){
   const totalSalary = sum(entries.filter(e=>e.type==='salary'), e=>e.amount);
   const totalRent = sum(entries.filter(e=>e.type==='rent'), e=>e.amount);
   const totalStock = sum(entries.filter(e=>e.type==='stock'), e=>e.amount);
+  const totalReturned = sum(entries.filter(e=>e.type==='returned'), e=>e.amount);
   const totalOther = sum(entries.filter(e=>e.type==='other'), e=>e.amount);
-  const totalSpent = round2(totalSalary+totalRent+totalStock+totalOther);
+  const totalSpent = round2(totalSalary+totalRent+totalStock+totalReturned+totalOther);
   const rows = names.map(n=>{
     const s = managerSummary(n);
     const nEsc = esc(n).replace(/'/g,"\\'");
@@ -3616,6 +3629,7 @@ function renderManagerLedgerPage(){
       <td class="num mono">${money(s.salary)}</td>
       <td class="num mono">${money(s.rent)}</td>
       <td class="num mono">${money(s.stock)}</td>
+      <td class="num mono">${money(s.returned)}</td>
       <td class="num mono">${money(s.other)}</td>
       <td class="num mono" style="font-weight:700;">${money(Math.abs(s.balance))} ${s.balance>0?'<span style="font-weight:400;">(with manager)</span>':s.balance<0?'<span style="font-weight:400;">(overspent)</span>':''}</td>
       <td><button class="btn btn-sm" onclick="openManagerDetail('${nEsc}')">View</button></td>
@@ -3623,19 +3637,20 @@ function renderManagerLedgerPage(){
   }).join('');
   return `
   <div class="page-head">
-    <div><div class="page-title">Manager Ledger</div><div class="page-sub">Money given to each manager, and what they spent it on (salary, rent, stock, other) — saved automatically, nothing to save by hand</div></div>
+    <div><div class="page-title">Manager Ledger</div><div class="page-sub">Money given to each manager, and what they spent it on or paid back (salary, rent, stock, returned, other) — saved automatically, nothing to save by hand</div></div>
     <button class="btn btn-primary" onclick="openManagerEntryForm()">+ New Entry</button>
   </div>
   <div class="grid g4" style="margin-bottom:16px;">
     <div class="stat neg"><div class="label">Total Given to Managers</div><div class="value">${money(totalGiven)}</div></div>
     <div class="stat pos"><div class="label">Total Salary Paid</div><div class="value">${money(totalSalary)}</div></div>
-    <div class="stat pos"><div class="label">Total Stock Purchased</div><div class="value">${money(totalStock)}</div></div>
+    <div class="stat pos"><div class="label">Total Returned (incl. Stock)</div><div class="value">${money(round2(totalReturned+totalStock))}</div><div class="page-sub" style="margin:2px 0 0;">Stock added counts as money paid back to you</div></div>
     <div class="stat ${(totalGiven-totalSpent)>=0?'pos':'neg'}"><div class="label">Still With Managers</div><div class="value">${money(Math.abs(totalGiven-totalSpent))}</div></div>
   </div>
   <div class="card">
     <div class="tbl-wrap">
-    <table><thead><tr><th>Manager</th><th class="num">Given</th><th class="num">Salary</th><th class="num">Rent</th><th class="num">Stock</th><th class="num">Other</th><th class="num">Balance</th><th></th></tr></thead>
-    <tbody>${rows||'<tr><td colspan="8" class="empty">No entries yet — click "+ New Entry" to add the first one.</td></tr>'}</tbody></table>
+    <table><thead><tr><th>Manager</th><th class="num">Given</th><th class="num">Salary</th><th class="num">Rent</th><th class="num">Stock</th><th class="num">Returned</th><th class="num">Other</th><th class="num">Balance</th><th></th></tr></thead>
+    <tbody>${rows||'<tr><td colspan="9" class="empty">No entries yet — click "+ New Entry" to add the first one.</td></tr>'}</tbody></table>
+
     </div>
   </div>
   <div id="manager-detail"></div>`;
@@ -3656,7 +3671,7 @@ function renderManagerDetail(name){
   <div class="card" style="margin-top:16px;">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
       <div><h3 class="slab" style="margin:0;">${esc(name)}</h3>
-        <div class="page-sub" style="margin-top:2px;">Given ${money(s.given)} · Salary ${money(s.salary)} · Rent ${money(s.rent)} · Stock ${money(s.stock)} · Other ${money(s.other)} · Balance <b>${money(Math.abs(s.balance))} ${s.balance>0?'(with manager)':s.balance<0?'(overspent)':'(settled)'}</b></div>
+        <div class="page-sub" style="margin-top:2px;">Given ${money(s.given)} · Salary ${money(s.salary)} · Rent ${money(s.rent)} · Stock ${money(s.stock)} · Returned ${money(s.returned)} · Other ${money(s.other)} · Balance <b>${money(Math.abs(s.balance))} ${s.balance>0?'(with manager)':s.balance<0?'(overspent)':'(settled)'}</b></div>
       </div>
       <button class="btn btn-primary btn-sm" onclick="openManagerEntryForm('${nEsc}')">+ Add Entry for ${esc(name)}</button>
     </div>
@@ -3825,7 +3840,7 @@ function openStockInForm(existingId){
         <div class="field" style="grid-column:1/-1;"><label>Purchased Via (Manager)</label><input id="si_manager" value="${editing?esc(editing.managerName||''):''}" placeholder="e.g. Ramesh (Site Manager)" list="manager-name-list-stockin"><datalist id="manager-name-list-stockin">${managers.map(n=>`<option value="${esc(n)}">`).join('')}</datalist></div>
         <div class="field" style="grid-column:1/-1;"><label>Note (optional)</label><input id="si_note" value="${editing?esc(editing.note||''):''}" placeholder="e.g. Truck no., supplier contact..."></div>
       </div>
-      <p class="page-sub" style="margin:-4px 0 12px;">If you enter a manager and amount, it's automatically logged as a "Stock Purchased" spend on that manager's Manager Ledger, and as an entry under their name in the Khata Book.</p>
+      <p class="page-sub" style="margin:-4px 0 12px;">If you enter a manager and amount, it counts as them paying you back in stock — it's logged as "Money Returned by Manager" on their Manager Ledger, and as money you received under their name in the Khata Book.</p>
       <div style="display:flex;gap:8px;justify-content:flex-end;">
         <button class="btn" onclick="closeModal()">Cancel</button>
         <button class="btn btn-primary" onclick="saveStockInEntry(${editing?`'${existingId}'`:'null'})">Save</button>
