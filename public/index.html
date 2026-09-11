@@ -2631,13 +2631,14 @@ function renderLotsPage(){
   </div>
   <div class="card" style="padding:0;">
   <div class="tbl-wrap" style="border:none;"><table>
-    <thead><tr><th>Lot No.</th><th>Wood</th><th>Warehouse</th><th class="num">Purchased CFT</th><th class="num">Sold CFT</th><th class="num">Balance CFT</th><th class="num">Avg Cost</th><th class="num">Stock Value</th><th></th></tr></thead>
+    <thead><tr><th>Lot No.</th><th>Wood</th><th>Warehouse</th><th class="num">Purchased CFT</th><th class="num">Sold CFT</th><th class="num">Balance CFT</th><th class="num">Avg Cost</th><th class="num">Stock Value</th><th>Manager</th><th></th></tr></thead>
     <tbody>
     ${SHARED.lots.length?SHARED.lots.map(l=>{
       const bal = round3(l.purchasedCFT-l.soldCFT);
       return `<tr><td class="mono">${esc(l.lotNo)}</td><td>${esc(l.wood)}</td><td>${esc(l.warehouse)||'Main'}</td>
       <td class="num mono">${numFmt(l.purchasedCFT,2)}</td><td class="num mono">${numFmt(l.soldCFT,2)}</td>
       <td class="num mono" style="font-weight:700;">${numFmt(bal,2)}</td><td class="num mono">${money(l.avgRate)}</td><td class="num mono">${money(bal*l.avgRate)}</td>
+      <td>${l.managerName?`<a href="#" onclick="event.preventDefault();openManagerDetail('${esc(l.managerName).replace(/'/g,"\\'")}')" style="color:var(--copper-deep);text-decoration:none;">${esc(l.managerName)}</a>`:'—'}</td>
       <td style="white-space:nowrap;"><button class="btn btn-sm btn-ghost" onclick="openLotForm('${l.id}')">Edit</button><button class="btn btn-sm btn-ghost btn-danger" onclick="deleteLot('${l.id}')">Delete</button></td></tr>`;
     }).join(''):'<tr><td colspan="10" class="empty">No lots yet — create one, add via a Purchase Bill, or import from Excel.</td></tr>'}
     </tbody>
@@ -2650,11 +2651,13 @@ function deleteLot(id){
   if(used){ toast('⚠ Can\'t delete — this lot is used on a saved invoice/bill. Delete those first.'); return; }
   if(!confirm(`Move lot ${l.lotNo} (${l.wood}) to Trash?`)) return;
   softDeleteToTrash('lot', l, `${l.lotNo} — ${l.wood}`);
+  removeStockManagerAndKhataLinks(l);
   SHARED.lots = SHARED.lots.filter(x=>x.id!==id);
   persist(); toast('✓ Moved to Trash'); renderPage();
 }
 function openLotForm(existingId){
   const editing = existingId ? getLot(existingId) : null;
+  const managers = managerNames();
   const html = `
   <div class="modal-bg" onclick="if(event.target===this)closeModal()">
     <div class="modal">
@@ -2666,7 +2669,9 @@ function openLotForm(existingId){
         <div class="field"><label>Purchased CFT</label><input type="number" step="0.001" id="lf_purchased" value="${editing?editing.purchasedCFT:0}"></div>
         <div class="field"><label>Sold CFT</label><input type="number" step="0.001" id="lf_sold" value="${editing?editing.soldCFT:0}"></div>
         <div class="field"><label>Avg Cost ₹ / CFT</label><input type="number" step="0.01" id="lf_avgrate" value="${editing?editing.avgRate:0}"></div>
+        <div class="field" style="grid-column:1/-1;"><label>Purchased Via (Manager, optional)</label><input id="lf_manager" value="${editing?esc(editing.managerName||''):''}" placeholder="e.g. Ramesh (Site Manager)" list="manager-name-list-lot"><datalist id="manager-name-list-lot">${managers.map(n=>`<option value="${esc(n)}">`).join('')}</datalist></div>
       </div>
+      <p class="page-sub" style="margin:-4px 0 12px;">If you enter a manager, the stock value (Purchased CFT × Avg Cost) is automatically logged as a "Stock Purchased" spend on their Manager Ledger, and as an entry under their name in the Khata Book.</p>
       <div style="display:flex;gap:8px;justify-content:flex-end;">
         <button class="btn" onclick="closeModal()">Cancel</button>
         <button class="btn btn-primary" onclick="saveLot(${editing?`'${existingId}'`:'null'})">${editing?'Save Changes':'Create Lot'}</button>
@@ -2678,17 +2683,30 @@ function openLotForm(existingId){
 function saveLot(existingId){
   const wood = v('lf_wood');
   if(!wood){ toast('Enter wood name'); return; }
+  const purchasedCFT = parseFloat(v('lf_purchased'))||0;
+  const avgRate = parseFloat(v('lf_avgrate'))||0;
+  const managerName = v('lf_manager');
+  const editing = existingId ? getLot(existingId) : null;
   const data = {
     lotNo: v('lf_no')||('LOT-'+(SHARED.lots.length+1)), wood,
     warehouse: v('lf_warehouse')||'Main',
-    purchasedCFT: parseFloat(v('lf_purchased'))||0,
+    purchasedCFT,
     soldCFT: parseFloat(v('lf_sold'))||0,
-    avgRate: parseFloat(v('lf_avgrate'))||0
+    avgRate,
+    managerName
   };
+  const id = existingId || uid();
+  const links = syncStockManagerAndKhata({
+    managerName, amount: round2(purchasedCFT*avgRate), date: todayISO(),
+    note: `Stock: Lot ${data.lotNo} — ${wood} (${numFmt(purchasedCFT,2)} CFT)`,
+    source: {field:'sourceLotId', id},
+    links: editing ? {managerLedgerEntryId: editing.managerLedgerEntryId, khataEntryId: editing.khataEntryId} : null
+  });
+  Object.assign(data, links);
   if(existingId){
-    Object.assign(getLot(existingId), data);
+    Object.assign(editing, data);
   }else{
-    SHARED.lots.push({id:uid(), ...data});
+    SHARED.lots.push({id, ...data});
   }
   persist(); closeModal(); toast(existingId?'✓ Lot updated':'✓ Lot created'); renderPage();
 }
@@ -3166,17 +3184,20 @@ function saveCalcAsLot(){
   const t = computeCalcTotals();
   if(t.cft<=0){ toast('Enter at least one size with quantity first'); return; }
   const woodGuess = CALC_ITEMS.find(it=>it.wood)?.wood || '';
+  const managers = managerNames();
   const html = `
   <div class="modal-bg" onclick="if(event.target===this)closeModal()">
     <div class="modal">
       <div class="modal-head"><h3>Save Batch as New Lot</h3><button class="close-x" onclick="closeModal()">✕</button></div>
-      <p class="page-sub" style="margin-top:-8px;">This adds ${numFmt(t.cft,3)} CFT (${numFmt(t.pieces,0)} pcs) to stock as a brand-new lot. It does not create a Purchase Bill or touch any ledger — use Purchase Bill instead if this timber came from a supplier you need to pay.</p>
+      <p class="page-sub" style="margin-top:-8px;">This adds ${numFmt(t.cft,3)} CFT (${numFmt(t.pieces,0)} pcs) to stock as a brand-new lot. It does not create a Purchase Bill — use Purchase Bill instead if this timber came from a supplier you need to pay.</p>
       <div class="grid g2">
         <div class="field"><label>Lot No.</label><input id="scl_no" value="LOT-${String(SHARED.lots.length+1).padStart(3,'0')}"></div>
         <div class="field"><label>Wood / Species</label><input id="scl_wood" value="${esc(woodGuess)}" list="wood-list-calc"></div>
         <div class="field"><label>Warehouse</label><input id="scl_warehouse" value="Main"></div>
         <div class="field"><label>Avg. Cost per CFT (optional)</label><input type="number" id="scl_rate" placeholder="e.g. 2000"></div>
+        <div class="field" style="grid-column:1/-1;"><label>Purchased Via (Manager, optional)</label><input id="scl_manager" placeholder="e.g. Ramesh (Site Manager)" list="manager-name-list-calc"><datalist id="manager-name-list-calc">${managers.map(n=>`<option value="${esc(n)}">`).join('')}</datalist></div>
       </div>
+      <p class="page-sub" style="margin:-4px 0 12px;">If you enter a manager, the stock value (CFT × Avg. Cost) is logged as a "Stock Purchased" spend on their Manager Ledger, and as an entry under their name in the Khata Book.</p>
       <div style="display:flex;gap:8px;justify-content:flex-end;">
         <button class="btn" onclick="closeModal()">Cancel</button>
         <button class="btn btn-primary" onclick="confirmSaveCalcAsLot(${t.cft})">Create Lot</button>
@@ -3189,8 +3210,17 @@ function confirmSaveCalcAsLot(cft){
   const wood = v('scl_wood');
   if(!wood){ toast('Enter a wood name'); return; }
   const rate = parseFloat(v('scl_rate'))||0;
-  SHARED.lots.push({id:uid(), lotNo:v('scl_no')||('LOT-'+(SHARED.lots.length+1)), wood,
-    warehouse:v('scl_warehouse')||'Main', purchasedCFT:round3(cft), soldCFT:0, avgRate:rate});
+  const managerName = v('scl_manager');
+  const id = uid();
+  const lotNo = v('scl_no')||('LOT-'+(SHARED.lots.length+1));
+  const links = syncStockManagerAndKhata({
+    managerName, amount: round2(cft*rate), date: todayISO(),
+    note: `Stock: Lot ${lotNo} — ${wood} (${numFmt(cft,3)} CFT)`,
+    source: {field:'sourceLotId', id},
+    links: null
+  });
+  SHARED.lots.push({id, lotNo, wood,
+    warehouse:v('scl_warehouse')||'Main', purchasedCFT:round3(cft), soldCFT:0, avgRate:rate, managerName, ...links});
   persist(); closeModal(); toast(`✓ Lot created with ${numFmt(cft,3)} CFT`);
   CALC_ITEMS = [blankCalcItem()];
   go('lots');
@@ -3320,11 +3350,11 @@ function renderKhataDetail(name){
     <table><thead><tr><th>Date</th><th>Note</th><th class="num">You Gave</th><th class="num">You Received</th><th class="num">Balance</th><th></th></tr></thead>
     <tbody>${withBal.length?withBal.map(e=>`<tr>
       <td>${fmtDate(e.date)}</td>
-      <td>${esc(e.note||'—')}${e.managerLedgerEntryId?' <span style="font-size:10px;color:var(--ink-soft);">🔗 linked to Manager Ledger</span>':''}</td>
+      <td>${esc(e.note||'—')}${e.sourceLotId?' <span style="font-size:10px;color:var(--ink-soft);">(via Timber Lot)</span>':e.sourceStockInId?' <span style="font-size:10px;color:var(--ink-soft);">(via Stock In)</span>':e.managerLedgerEntryId?' <span style="font-size:10px;color:var(--ink-soft);">🔗 linked to Manager Ledger</span>':''}</td>
       <td class="num mono">${e.type==='gave'?money(e.amount):''}</td>
       <td class="num mono">${e.type==='got'?money(e.amount):''}</td>
       <td class="num mono">${money(Math.abs(e.balance))} ${e.balance>0?'Dr':(e.balance<0?'Cr':'')}</td>
-      <td style="white-space:nowrap;"><button class="btn btn-sm btn-ghost" onclick="openKhataEntryForm(null,'${e.id}')">Edit</button><button class="btn btn-sm btn-ghost btn-danger" onclick="deleteKhataEntry('${e.id}')">Delete</button></td>
+      <td style="white-space:nowrap;">${e.sourceLotId?`<button class="btn btn-sm btn-ghost" onclick="go('lots')">View in Stock</button>`:e.sourceStockInId?`<button class="btn btn-sm btn-ghost" onclick="go('stockin')">View in Stock In</button>`:`<button class="btn btn-sm btn-ghost" onclick="openKhataEntryForm(null,'${e.id}')">Edit</button><button class="btn btn-sm btn-ghost btn-danger" onclick="deleteKhataEntry('${e.id}')">Delete</button>`}</td>
     </tr>`).join(''):'<tr><td colspan="6" class="empty">No entries yet.</td></tr>'}</tbody></table>
     </div>
   </div>`;
@@ -3333,6 +3363,14 @@ function openKhataEntryForm(prefillName, existingId){
   const names = khataNames();
   const managers = managerNames();
   const editing = existingId ? (SHARED.khata||[]).find(x=>x.id===existingId) : null;
+  if(editing && editing.sourceLotId){
+    toast('⚠ This entry comes from a Timber Lot record — edit or delete it from Timber Lots / Stock instead.');
+    return;
+  }
+  if(editing && editing.sourceStockInId){
+    toast('⚠ This entry comes from a Stock In record — edit or delete it from the "Stock In (KG)" page instead.');
+    return;
+  }
   const linked = !!(editing && editing.managerLedgerEntryId);
   const html = `
   <div class="modal-bg" onclick="if(event.target===this)closeModal()">
@@ -3417,6 +3455,14 @@ function saveKhataEntry(existingId){
 function deleteKhataEntry(id){
   const e = (SHARED.khata||[]).find(x=>x.id===id);
   if(!e) return;
+  if(e.sourceLotId){
+    toast('⚠ This entry comes from a Timber Lot record — delete it from Timber Lots / Stock instead.');
+    return;
+  }
+  if(e.sourceStockInId){
+    toast('⚠ This entry comes from a Stock In record — delete it from the "Stock In (KG)" page instead.');
+    return;
+  }
   if(!confirm('Delete this entry?'+(e.managerLedgerEntryId?' Its linked Manager Ledger entry will be removed too.':''))) return;
   const name = e.personName;
   if(e.managerLedgerEntryId){
@@ -3496,6 +3542,47 @@ const MANAGER_ENTRY_TYPES = {
   returned: {label:'Money Returned by Manager', sign:-1},
   other:    {label:'Other Expense',             sign:-1}
 };
+
+// Keeps a Manager Ledger entry AND a Khata Book entry in sync with a stock
+// record (a Timber Lot or a Stock In (KG) entry) that names a manager and a
+// cost. Called every time such a stock record is saved. `source` identifies
+// where the money-out came from, so the two generated entries link back to
+// it (and Edit/Delete on the Manager Ledger / Khata Book pages redirect to
+// this stock record instead of letting themselves drift out of sync).
+// Returns the {managerLedgerEntryId, khataEntryId} to store back on the
+// stock record; pass the previous values in via `links` when editing.
+function syncStockManagerAndKhata({managerName, amount, date, note, source, links}){
+  let mlId = (links && links.managerLedgerEntryId) || null;
+  let khId = (links && links.khataEntryId) || null;
+  if(managerName && amount>0){
+    if(!SHARED.managerLedger) SHARED.managerLedger = [];
+    if(!SHARED.khata) SHARED.khata = [];
+    const mlData = {managerName, date, type:'stock', amount, note, [source.field]: source.id};
+    const existingMl = mlId ? SHARED.managerLedger.find(x=>x.id===mlId) : null;
+    if(existingMl){ Object.assign(existingMl, mlData); }
+    else{ const ne={id:uid(), ...mlData}; SHARED.managerLedger.push(ne); mlId = ne.id; }
+
+    const khData = {personName:managerName, date, type:'gave', amount, note, [source.field]: source.id, managerLedgerEntryId: mlId};
+    const existingKh = khId ? SHARED.khata.find(x=>x.id===khId) : null;
+    if(existingKh){ Object.assign(existingKh, khData); }
+    else{ const ne={id:uid(), ...khData}; SHARED.khata.push(ne); khId = ne.id; }
+
+    const mlEntry = SHARED.managerLedger.find(x=>x.id===mlId);
+    if(mlEntry) mlEntry.sourceKhataEntryId = khId;
+  }else{
+    if(mlId){ SHARED.managerLedger = (SHARED.managerLedger||[]).filter(x=>x.id!==mlId); mlId = null; }
+    if(khId){ SHARED.khata = (SHARED.khata||[]).filter(x=>x.id!==khId); khId = null; }
+  }
+  return {managerLedgerEntryId: mlId, khataEntryId: khId};
+}
+// Removes whatever Manager Ledger / Khata Book entries a stock record had
+// linked, e.g. when the stock record itself is deleted.
+function removeStockManagerAndKhataLinks(links){
+  if(!links) return;
+  if(links.managerLedgerEntryId) SHARED.managerLedger = (SHARED.managerLedger||[]).filter(x=>x.id!==links.managerLedgerEntryId);
+  if(links.khataEntryId) SHARED.khata = (SHARED.khata||[]).filter(x=>x.id!==links.khataEntryId);
+}
+
 function managerNames(){
   const set = new Set((SHARED.managerLedger||[]).map(e=>e.managerName));
   return Array.from(set).sort((a,b)=>a.localeCompare(b));
@@ -3577,12 +3664,12 @@ function renderManagerDetail(name){
     <table><thead><tr><th>Date</th><th>Type</th><th>Note</th><th class="num">Given</th><th class="num">Spent</th><th class="num">Balance</th><th></th></tr></thead>
     <tbody>${withBal.length?withBal.map(e=>`<tr>
       <td>${fmtDate(e.date)}</td>
-      <td>${esc(MANAGER_ENTRY_TYPES[e.type]?.label||e.type)}${e.sourceStockInId?' <span style="font-size:10px;color:var(--ink-soft);">(via Stock In)</span>':''}${e.sourceKhataEntryId?' <span style="font-size:10px;color:var(--ink-soft);">(via Khata Book)</span>':''}</td>
+      <td>${esc(MANAGER_ENTRY_TYPES[e.type]?.label||e.type)}${e.sourceLotId?' <span style="font-size:10px;color:var(--ink-soft);">(via Timber Lot)</span>':e.sourceStockInId?' <span style="font-size:10px;color:var(--ink-soft);">(via Stock In)</span>':e.sourceKhataEntryId?' <span style="font-size:10px;color:var(--ink-soft);">(via Khata Book)</span>':''}</td>
       <td>${esc(e.note||'—')}</td>
       <td class="num mono">${e.type==='given'?money(e.amount):''}</td>
       <td class="num mono">${e.type!=='given'?money(e.amount):''}</td>
       <td class="num mono">${money(Math.abs(e.balance))} ${e.balance>0?'Dr':(e.balance<0?'Cr':'')}</td>
-      <td>${e.sourceStockInId?`<button class="btn btn-sm btn-ghost" onclick="go('stockin')">View in Stock In</button>`:e.sourceKhataEntryId?`<button class="btn btn-sm btn-ghost" onclick="openKhataDetail('${esc(e.managerName).replace(/'/g,"\\'")}')">View in Khata</button>`:`<button class="btn btn-sm btn-ghost" onclick="openManagerEntryForm(null,'${e.id}')">Edit</button><button class="btn btn-sm btn-ghost btn-danger" onclick="deleteManagerEntry('${e.id}')">Delete</button>`}</td>
+      <td>${e.sourceLotId?`<button class="btn btn-sm btn-ghost" onclick="go('lots')">View in Stock</button>`:e.sourceStockInId?`<button class="btn btn-sm btn-ghost" onclick="go('stockin')">View in Stock In</button>`:e.sourceKhataEntryId?`<button class="btn btn-sm btn-ghost" onclick="openKhataDetail('${esc(e.managerName).replace(/'/g,"\\'")}')">View in Khata</button>`:`<button class="btn btn-sm btn-ghost" onclick="openManagerEntryForm(null,'${e.id}')">Edit</button><button class="btn btn-sm btn-ghost btn-danger" onclick="deleteManagerEntry('${e.id}')">Delete</button>`}</td>
     </tr>`).join(''):'<tr><td colspan="7" class="empty">No entries yet.</td></tr>'}</tbody></table>
     </div>
   </div>`;
@@ -3590,6 +3677,10 @@ function renderManagerDetail(name){
 function openManagerEntryForm(prefillName, existingId){
   const names = managerNames();
   const editing = existingId ? (SHARED.managerLedger||[]).find(x=>x.id===existingId) : null;
+  if(editing && editing.sourceLotId){
+    toast('⚠ This entry comes from a Timber Lot record — edit or delete it from Timber Lots / Stock instead.');
+    return;
+  }
   if(editing && editing.sourceStockInId){
     toast('⚠ This entry comes from a Stock In record — edit or delete it from the "Stock In (KG)" page instead.');
     return;
@@ -3639,6 +3730,10 @@ function saveManagerEntry(existingId){
 function deleteManagerEntry(id){
   const e = (SHARED.managerLedger||[]).find(x=>x.id===id);
   if(!e) return;
+  if(e.sourceLotId){
+    toast('⚠ This entry comes from a Timber Lot record — delete it from Timber Lots / Stock instead.');
+    return;
+  }
   if(e.sourceStockInId){
     toast('⚠ This entry comes from a Stock In record — delete it from the "Stock In (KG)" page instead.');
     return;
@@ -3730,7 +3825,7 @@ function openStockInForm(existingId){
         <div class="field" style="grid-column:1/-1;"><label>Purchased Via (Manager)</label><input id="si_manager" value="${editing?esc(editing.managerName||''):''}" placeholder="e.g. Ramesh (Site Manager)" list="manager-name-list-stockin"><datalist id="manager-name-list-stockin">${managers.map(n=>`<option value="${esc(n)}">`).join('')}</datalist></div>
         <div class="field" style="grid-column:1/-1;"><label>Note (optional)</label><input id="si_note" value="${editing?esc(editing.note||''):''}" placeholder="e.g. Truck no., supplier contact..."></div>
       </div>
-      <p class="page-sub" style="margin:-4px 0 12px;">If you enter a manager and amount, it's automatically logged as a "Stock Purchased" spend on that manager's ledger.</p>
+      <p class="page-sub" style="margin:-4px 0 12px;">If you enter a manager and amount, it's automatically logged as a "Stock Purchased" spend on that manager's Manager Ledger, and as an entry under their name in the Khata Book.</p>
       <div style="display:flex;gap:8px;justify-content:flex-end;">
         <button class="btn" onclick="closeModal()">Cancel</button>
         <button class="btn btn-primary" onclick="saveStockInEntry(${editing?`'${existingId}'`:'null'})">Save</button>
@@ -3758,35 +3853,20 @@ function saveStockInEntry(existingId){
   const note = v('si_note');
 
   const editing = existingId ? (SHARED.stockInKG||[]).find(x=>x.id===existingId) : null;
-  let linkId = editing ? editing.managerLedgerEntryId : null;
+  const id = existingId || uid();
 
-  // sync the linked manager-ledger "stock" entry
-  if(managerName && amount>0){
-    const ledgerNote = `Stock: ${wood} ${thickness} (${numFmt(qty,2)} kg)${note?' — '+note:''}`;
-    if(linkId){
-      const le = (SHARED.managerLedger||[]).find(x=>x.id===linkId);
-      if(le){ Object.assign(le, {managerName, date, amount, note:ledgerNote}); }
-      else { const ne={id:uid(),managerName,date,type:'stock',amount,note:ledgerNote,sourceStockInId:existingId||null}; SHARED.managerLedger.push(ne); linkId=ne.id; }
-    }else{
-      const ne = {id:uid(), managerName, date, type:'stock', amount, note:ledgerNote, sourceStockInId: existingId||null};
-      if(!SHARED.managerLedger) SHARED.managerLedger=[];
-      SHARED.managerLedger.push(ne);
-      linkId = ne.id;
-    }
-  }else if(linkId){
-    // manager or amount removed — drop the linked ledger entry
-    SHARED.managerLedger = (SHARED.managerLedger||[]).filter(x=>x.id!==linkId);
-    linkId = null;
-  }
+  const links = syncStockManagerAndKhata({
+    managerName, amount, date,
+    note: `Stock: ${wood} ${thickness} (${numFmt(qty,2)} kg)${note?' — '+note:''}`,
+    source: {field:'sourceStockInId', id},
+    links: editing ? {managerLedgerEntryId: editing.managerLedgerEntryId, khataEntryId: editing.khataEntryId} : null
+  });
 
-  const data = {wood, thickness, qty, rate, amount, managerName, date, note, managerLedgerEntryId: linkId};
+  const data = {wood, thickness, qty, rate, amount, managerName, date, note, ...links};
   if(existingId){
     Object.assign(editing, data);
-    if(linkId){ const le=(SHARED.managerLedger||[]).find(x=>x.id===linkId); if(le) le.sourceStockInId = existingId; }
   }else{
     if(!SHARED.stockInKG) SHARED.stockInKG = [];
-    const id = uid();
-    if(linkId){ const le=(SHARED.managerLedger||[]).find(x=>x.id===linkId); if(le) le.sourceStockInId = id; }
     SHARED.stockInKG.push({id, ...data});
   }
   persist(); closeModal(); toast('✓ Stock in saved — auto-saved to your PC'); renderPage();
@@ -3795,9 +3875,7 @@ function deleteStockInEntry(id){
   const e = (SHARED.stockInKG||[]).find(x=>x.id===id);
   if(!e) return;
   if(!confirm('Delete this stock-in entry?')) return;
-  if(e.managerLedgerEntryId){
-    SHARED.managerLedger = (SHARED.managerLedger||[]).filter(x=>x.id!==e.managerLedgerEntryId);
-  }
+  removeStockManagerAndKhataLinks(e);
   SHARED.stockInKG = (SHARED.stockInKG||[]).filter(x=>x.id!==id);
   persist(); toast('✓ Deleted'); renderPage();
 }
