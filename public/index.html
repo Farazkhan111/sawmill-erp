@@ -395,6 +395,187 @@ tr:last-child td{border-bottom:none;}
   input,select,textarea{font-size:16px;}
   .items-table input,.items-table select,.dim-cell input,.dim-cell select{font-size:12.5px;}
 }
+
+/* =========================================================================
+   MOBILE + TABLET UI  (<=1024px) — app-style layout: bottom tab bar,
+   "More" sheet, card lists instead of tables, big touch targets.
+   Desktop (>1024px) is untouched.
+========================================================================= */
+#tabbar,#more-sheet,#more-backdrop{display:none;}
+@media (max-width:1024px){
+  body{font-size:15px;background:var(--paper);padding-bottom:calc(72px + env(safe-area-inset-bottom));}
+  #sidebar,#sidebar-backdrop,#hamburger{display:none !important;}
+  #main{width:100%;}
+
+  /* Top bar: slim, sticky */
+  #topbar{position:sticky;top:0;z-index:150;background:var(--bark);color:#fff;border:0;
+    padding:calc(8px + env(safe-area-inset-top)) 12px 10px;height:auto;flex-wrap:wrap;row-gap:8px;}
+  #topbar > button.btn-primary,#tb-user,#topbar .fy{display:none !important;}
+  #topbar .co-switch{color:#fff;background:rgba(255,255,255,.1);border:0;border-radius:12px;min-height:44px;padding:0 14px;font-size:16px;font-weight:600;max-width:70vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  #topbar .login-logout{display:none;}
+  #search-wrap{order:5;flex-basis:100%;}
+  #search{height:46px;border-radius:14px;border:0;padding:0 16px;font-size:16px;width:100%;}
+  #content{padding:16px 14px 24px;overflow:visible;}
+
+  /* Page header: title, then full-width primary action */
+  .page-head{flex-direction:column;align-items:stretch;border:0;padding:0;margin-bottom:14px;row-gap:10px;}
+  .page-title{font-size:24px;}
+  .page-head > .btn,.page-head .btn-primary{width:100%;min-height:52px;font-size:16px;border-radius:14px;}
+  .card{border-radius:16px;padding:14px;}
+
+  /* Touch targets */
+  .btn{min-height:48px;padding:0 18px;font-size:15px;border-radius:12px;}
+  .btn-sm{min-height:44px;padding:0 16px;font-size:14px;}
+  input,select,textarea{min-height:50px;font-size:16px !important;border-radius:12px;padding:10px 12px;}
+  textarea{min-height:90px;}
+  .field label{font-size:13px;margin-bottom:5px;}
+  .items-table input,.items-table select,.dim-cell input,.dim-cell select{min-height:44px;}
+
+  /* Stats */
+  .grid.g2,.grid.g3,.grid.g4{grid-template-columns:repeat(2,1fr);gap:10px;}
+  .stat{padding:12px;border-radius:14px;}
+  .row{flex-direction:column;gap:0;}
+
+  /* TABLES -> CARDS (invoice line-item editors keep their scroll table) */
+  .tbl-wrap{border:0;max-height:none;overflow:visible;background:none;}
+  .tbl-wrap table:not(.items-table),.tbl-wrap table:not(.items-table) tbody{display:block;width:100%;}
+  .tbl-wrap table:not(.items-table) thead{display:none;}
+  .tbl-wrap table:not(.items-table) tr{display:block;background:#fff;border:1px solid var(--line);border-radius:16px;
+    padding:12px 14px;margin-bottom:12px;box-shadow:0 1px 3px rgba(36,28,22,.06);}
+  .tbl-wrap table:not(.items-table) td{display:flex;justify-content:space-between;align-items:center;gap:12px;
+    padding:8px 0;border:0;border-bottom:1px dashed var(--line);font-size:14.5px;text-align:right;
+    position:static !important;box-shadow:none !important;background:none !important;}
+  .tbl-wrap table:not(.items-table) td::before{content:attr(data-label);color:var(--ink-soft);font-size:12px;
+    text-transform:uppercase;letter-spacing:.04em;text-align:left;flex-shrink:0;}
+  .tbl-wrap table:not(.items-table) td:first-child{font-size:17px;font-weight:700;border-bottom:1px solid var(--line);
+    padding-top:2px;text-align:left;justify-content:flex-start;}
+  .tbl-wrap table:not(.items-table) td:first-child::before{display:none;}
+  .tbl-wrap table:not(.items-table) td[data-label=""]::before{display:none;}
+  .tbl-wrap table:not(.items-table) td:last-child{border:0;padding:10px 0 2px;display:flex;flex-wrap:wrap;gap:8px;justify-content:stretch;}
+  .tbl-wrap table:not(.items-table) td:last-child .btn{flex:1 1 40%;margin:0 !important;}
+  .tbl-wrap table:not(.items-table) td.empty{display:block;text-align:center;border:0;color:var(--ink-soft);padding:24px 0;}
+  .tbl-wrap table:not(.items-table) td.empty::before{display:none;}
+  .tbl-wrap:has(.items-table){overflow-x:auto;}
+
+  /* Modals -> full-screen sheets */
+  .modal-bg{padding:0;align-items:stretch;}
+  .modal,.modal.wide{max-width:100%;min-height:100%;border-radius:0;padding:16px;padding-bottom:calc(32px + env(safe-area-inset-bottom));}
+  .modal-head{position:sticky;top:-16px;margin:-16px -16px 14px;padding:12px 16px;background:#fff;z-index:5;border-bottom:1px solid var(--line);}
+  .close-x{min-width:48px;min-height:48px;font-size:20px;}
+  .modal .btn-primary{width:100%;margin-top:8px;min-height:54px;font-size:16px;}
+
+  /* Bottom tab bar */
+  #tabbar{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:230;background:#fff;border-top:1px solid var(--line);
+    padding-bottom:env(safe-area-inset-bottom);box-shadow:0 -4px 18px rgba(36,28,22,.08);}
+  #tabbar button{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+    min-height:64px;border:0;background:none;color:var(--ink-soft);font:600 11px 'Inter',sans-serif;}
+  #tabbar button span{font-size:22px;line-height:1;}
+  #tabbar button.on{color:var(--copper-deep);}
+  #tabbar button.on span{transform:translateY(-1px);}
+  .fab{display:flex;width:60px;height:60px;bottom:calc(80px + env(safe-area-inset-bottom));right:16px;}
+
+  /* More sheet: big tiles */
+  #more-backdrop{display:block;position:fixed;inset:0;background:rgba(36,28,22,.5);z-index:240;opacity:0;pointer-events:none;transition:opacity .2s;}
+  #more-sheet{display:block;position:fixed;left:0;right:0;bottom:0;max-height:88vh;overflow-y:auto;z-index:250;background:var(--paper);
+    border-radius:22px 22px 0 0;padding:10px 14px calc(24px + env(safe-area-inset-bottom));transform:translateY(105%);transition:transform .25s ease;}
+  body.more-open #more-sheet{transform:none;}
+  body.more-open #more-backdrop{opacity:1;pointer-events:auto;}
+  body.more-open{overflow:hidden;}
+  #more-sheet .grab{width:44px;height:5px;border-radius:3px;background:var(--line);margin:0 auto 12px;}
+  #more-sheet h4{margin:14px 4px 8px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);}
+  #more-sheet .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+  #more-sheet .tile{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center;
+    min-height:84px;padding:10px 6px;background:#fff;border:1px solid var(--line);border-radius:16px;font:600 12.5px 'Inter',sans-serif;color:var(--ink);}
+  #more-sheet .tile span{font-size:24px;}
+  #more-sheet .tile.on{border-color:var(--copper);background:#fff6ee;}
+}
+@media (min-width:700px) and (max-width:1024px){
+  /* Tablet: roomier, cards in two columns, 4 stat tiles, 4 tiles per row */
+  #content{padding:20px 24px 24px;max-width:960px;margin:0 auto;}
+  .tbl-wrap table:not(.items-table) tbody{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;}
+  .tbl-wrap table:not(.items-table) tr{margin:0;}
+  .grid.g3,.grid.g4{grid-template-columns:repeat(3,1fr);}
+  .page-head{flex-direction:row;align-items:center;}
+  .page-head > .btn,.page-head .btn-primary{width:auto;min-width:200px;}
+  #more-sheet{left:50%;right:auto;width:640px;margin-left:-320px;}
+  #more-sheet .tiles{grid-template-columns:repeat(4,1fr);}
+  .modal,.modal.wide{max-width:720px;margin:0 auto;}
+}
+
+/* ---- Mobile/tablet pass 2: app-style, nothing like the PC screens ---- */
+@media (max-width:1024px){
+  tbody tr:nth-child(even),tbody tr:hover{background:#fff;}
+  .stat:hover,.card:hover{transform:none;}
+  .btn:active,.tile:active,#tabbar button:active{transform:scale(.96);opacity:.85;}
+  #content{animation:mfade .18s ease;}
+  @keyframes mfade{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:none;}}
+  .toast{left:16px;right:16px;bottom:calc(88px + env(safe-area-inset-bottom));text-align:center;border-radius:14px;font-size:15px;}
+  .badge{font-size:12px;padding:4px 12px;}
+
+  /* Tabs -> scrolling pills */
+  .tabs{overflow-x:auto;gap:8px;border:0;padding-bottom:4px;scrollbar-width:none;}
+  .tab{white-space:nowrap;border:1px solid var(--line);border-radius:22px;background:#fff;padding:12px 18px;font-size:14px;min-height:46px;}
+  .tab.active{background:var(--copper-deep);color:#fff;border-color:var(--copper-deep);}
+
+  /* Forms: 2 short columns, long fields full width, labels above */
+  .modal .grid{grid-template-columns:1fr 1fr;gap:0 12px;}
+  .modal .grid > [style*="grid-column"],.modal .grid > .field:only-child{grid-column:1/-1 !important;}
+  .modal h4.slab{font-size:16px;margin:22px 0 8px !important;padding-top:14px;border-top:1px solid var(--line);}
+  .totals-box{width:100%;background:var(--paper-2);border-radius:14px;padding:10px 14px;}
+  .totals-box .trow{font-size:15px;padding:9px 0;align-items:center;}
+  .totals-box .trow.grand{font-size:19px;}
+  .totals-box .trow input{width:130px;}
+  .formula-strip{font-size:12px;}
+
+  /* Save / Cancel stick to the bottom of every form */
+  .modal > div[style*="justify-content:flex-end"]{position:sticky;bottom:calc(-32px - env(safe-area-inset-bottom));display:flex !important;gap:10px;
+    margin:18px -16px 0 !important;padding:12px 16px calc(12px + env(safe-area-inset-bottom));background:#fff;border-top:1px solid var(--line);z-index:6;}
+  .modal > div[style*="justify-content:flex-end"] .btn{flex:1;margin:0;min-height:54px;font-size:16px;}
+  .modal > div[style*="justify-content:flex-end"] .btn-primary{flex:2;}
+
+  /* Invoice item rows -> one stacked card per timber item */
+  .items-table,.items-table tbody{display:block;width:100% !important;}
+  .items-table thead{display:none;}
+  .items-table tr.item-row{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px;background:#fff;border:1px solid var(--line);
+    border-left:5px solid var(--copper);border-radius:16px;padding:14px;margin-bottom:12px;}
+  .items-table td{display:block;width:auto !important;min-width:0 !important;padding:0 !important;border:0 !important;overflow:visible;background:none !important;position:static !important;box-shadow:none !important;}
+  .items-table td::before{content:attr(data-label);display:block;font-size:12px;color:var(--ink-soft);margin-bottom:4px;}
+  .items-table td:nth-child(1){grid-column:1/-1;font-weight:700;font-size:17px;}
+  .items-table td:nth-child(1)::before{content:"Item ";display:inline;font-size:17px;color:var(--ink);margin:0;}
+  .items-table td:nth-child(2),.items-table td:nth-child(3),.items-table td:nth-child(11),.items-table td:nth-child(12){grid-column:1/-1;}
+  .items-table td:nth-child(11){display:flex;justify-content:space-between;align-items:center;font-size:19px;font-weight:700;background:var(--paper-2) !important;border-radius:12px;padding:12px !important;}
+  .items-table td:nth-child(11)::before{display:inline;margin:0;font-size:13px;}
+  .items-table td:nth-child(12) .btn{width:100%;}
+  .items-table td:nth-child(12)::before{display:none;}
+  .items-table input,.items-table select{font-size:16px !important;padding:10px 12px;}
+  .tbl-wrap:has(.items-table){overflow:visible;}
+  #items-wrap > .btn,#items-wrap > button.btn{width:100%;min-height:52px;border-style:dashed;}
+
+  /* Settings / calculators / any inline-styled flex button rows wrap */
+  .page-head div[style*="display:flex"]{flex-wrap:wrap;}
+}
+@media (max-width:699px){
+  /* Phone: stat cards become a swipe strip; dashboard actions = big tiles */
+  .grid:has(> .stat){display:flex;overflow-x:auto;scroll-snap-type:x mandatory;gap:10px;margin:0 -14px 14px !important;padding:2px 14px;scrollbar-width:none;}
+  .grid:has(> .stat) > .stat{flex:0 0 70%;scroll-snap-align:start;}
+  .stat .value{font-size:26px;}
+  .page-head > div[style*="display:flex"]{display:grid !important;grid-template-columns:repeat(3,1fr);gap:8px;width:100%;}
+  .page-head > div[style*="display:flex"] .btn{flex-direction:column;min-height:64px;padding:8px 4px;font-size:13px;line-height:1.2;white-space:normal;text-align:center;}
+  .grid.g2:has(> .card){grid-template-columns:1fr;}
+  .modal .grid.g3,.modal .grid.g4{grid-template-columns:1fr 1fr;}
+}
+@media (min-width:700px) and (max-width:1024px){
+  /* Tablet: side icon rail instead of bottom bar */
+  body{padding-bottom:0;}
+  #tabbar{top:0;right:auto;width:92px;flex-direction:column;justify-content:flex-start;gap:6px;
+    padding:calc(14px + env(safe-area-inset-top)) 6px 14px;border-top:0;border-right:1px solid var(--line);box-shadow:4px 0 18px rgba(36,28,22,.06);}
+  #tabbar button{flex:0 0 auto;min-height:78px;border-radius:16px;font-size:12px;}
+  #tabbar button.on{background:#fff2e6;}
+  #main{width:auto;flex:1;min-width:0;margin-left:92px;}
+  .fab{bottom:24px;}
+  .toast{left:116px;bottom:24px;}
+  .modal > div[style*="justify-content:flex-end"]{bottom:-32px;}
+}
 </style>
 </head>
 <body>
@@ -3302,8 +3483,10 @@ function renderLedgerBody(){
    added or deleted, so nothing has to be saved by hand.
 ========================================================================= */
 function khataNames(){
+  // Names appear in the order they were first entered (not alphabetical).
+  // SHARED.khata is stored in entry order, and a Set keeps insertion order.
   const set = new Set((SHARED.khata||[]).map(e=>e.personName));
-  return Array.from(set).sort((a,b)=>a.localeCompare(b));
+  return Array.from(set);
 }
 function khataSummary(name){
   const mine = (SHARED.khata||[]).filter(e=>e.personName===name);
@@ -3354,7 +3537,7 @@ function openKhataDetail(name){
 function renderKhataDetail(name){
   const box = document.getElementById('khata-detail');
   if(!box) return;
-  const mine = (SHARED.khata||[]).filter(e=>e.personName===name).sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id));
+  const mine = (SHARED.khata||[]).filter(e=>e.personName===name).sort((a,b)=>a.date.localeCompare(b.date)); // stable sort: same-date entries stay in entry order
   let running=0;
   const withBal = mine.map(e=>{ running += (e.type==='gave'?e.amount:-e.amount); return {...e, balance: round2(running)}; });
   const s = khataSummary(name);
@@ -3498,7 +3681,7 @@ function deleteKhataEntry(id){
   setTimeout(()=>renderKhataDetail(name), 0);
 }
 function printKhataStatement(name){
-  const mine = (SHARED.khata||[]).filter(e=>e.personName===name).sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id));
+  const mine = (SHARED.khata||[]).filter(e=>e.personName===name).sort((a,b)=>a.date.localeCompare(b.date)); // stable sort: same-date entries stay in entry order
   let running=0;
   const withBal = mine.map(e=>{ running += (e.type==='gave'?e.amount:-e.amount); return {...e, balance: round2(running)}; });
   const s = khataSummary(name);
@@ -4608,6 +4791,50 @@ function maybeRemindBackup(){
     setTimeout(()=>toast(last?'⚠ Backup is over a week old — grab a fresh one from Settings':'⚠ No backup yet — download one from Company & Settings'), 1200);
   }
 }
+</script>
+<div id="more-backdrop" onclick="closeMore()"></div>
+<div id="more-sheet"></div>
+<nav id="tabbar"></nav>
+<script>
+/* Mobile/tablet app shell: bottom tabs, More sheet, tables->cards, smart "+" button */
+(function(){
+  const TABS=[['dashboard','🏠','Home'],['sales','🧾','Sales'],['khata','📒','Khata'],['lots','🪵','Stock']];
+  const ADD={sales:()=>openSalesForm(),purchase:()=>openPurchaseForm(),receipts:()=>openReceiptForm(),payments:()=>openPaymentForm(),
+    customers:()=>openPartyForm('customer'),suppliers:()=>openPartyForm('supplier'),khata:()=>openKhataEntryForm(),
+    managers:()=>openManagerEntryForm(),lots:()=>openLotForm(),stockin:()=>openStockInForm()};
+  const ADDLABEL={khata:'New Khata Entry',purchase:'New Purchase Bill',receipts:'New Receipt',payments:'New Payment',customers:'New Customer',suppliers:'New Supplier',managers:'New Manager Entry',lots:'New Timber Lot',stockin:'New Stock In'};
+  window.closeMore=()=>document.body.classList.remove('more-open');
+  window.openMore=()=>{buildMore();document.body.classList.add('more-open');};
+  function buildMore(){
+    let h='<div class="grab"></div>';
+    NAV.forEach(g=>{h+='<h4>'+g.group+'</h4><div class="tiles">'+g.items.map(it=>
+      '<button class="tile '+(ROUTE===it.id?'on':'')+'" onclick="closeMore();go(\''+it.id+'\')"><span>'+(it.icon||'•')+'</span>'+it.label+'</button>').join('')+'</div>';});
+    h+='<h4>Account</h4><div class="tiles"><button class="tile" onclick="closeMore();logout()"><span>⎋</span>Log out</button></div>';
+    document.getElementById('more-sheet').innerHTML=h;
+  }
+  function buildTabs(){
+    const inTabs=TABS.some(t=>t[0]===ROUTE);
+    document.getElementById('tabbar').innerHTML=TABS.map(t=>'<button class="'+(ROUTE===t[0]?'on':'')+'" onclick="go(\''+t[0]+'\')"><span>'+t[1]+'</span>'+t[2]+'</button>').join('')
+      +'<button class="'+(inTabs?'':'on')+'" onclick="openMore()"><span>☰</span>More</button>';
+  }
+  function fab(){
+    const b=document.querySelector('.fab'), f=ADD[ROUTE];
+    b.style.display=f?'':'none';
+    b.onclick=f||null; b.setAttribute('aria-label',ADDLABEL[ROUTE]||'New Sales Invoice');
+  }
+  function cards(){
+    document.querySelectorAll('#content .tbl-wrap table, #modal-root .tbl-wrap table').forEach(t=>{
+      const heads=[...t.querySelectorAll('thead th')].map(th=>th.textContent.trim());
+      t.querySelectorAll('tbody tr').forEach(tr=>[...tr.children].forEach((td,i)=>{
+        if(td.dataset.label===undefined) td.dataset.label=heads[i]||'';}));
+    });
+  }
+  let busy=false;
+  function refresh(){ if(busy)return; busy=true; buildTabs(); fab(); cards(); busy=false; }
+  ['content','modal-root'].forEach(id=>new MutationObserver(refresh).observe(document.getElementById(id),{childList:true,subtree:true}));
+  refresh();
+  if(!document.querySelector('meta[name=theme-color]')) document.head.insertAdjacentHTML('beforeend','<meta name="theme-color" content="#241c16">');
+})();
 </script>
 </body>
 </html>
