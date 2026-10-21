@@ -576,6 +576,33 @@ tr:last-child td{border-bottom:none;}
   .toast{left:116px;bottom:24px;}
   .modal > div[style*="justify-content:flex-end"]{bottom:-32px;}
 }
+
+/* ---- Khata person page: all entries of one name as a list (all devices) ---- */
+.k-page{max-width:900px;margin:0 auto;}
+.k-top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;}
+.k-actions{display:flex;gap:8px;flex-wrap:wrap;}
+.k-title{font-family:'Zilla Slab',serif;font-size:28px;font-weight:600;}
+.k-list{background:#fff;border:1px solid var(--line);border-radius:16px;overflow:hidden;}
+.k-item{display:grid;grid-template-columns:44px 1fr auto;gap:4px 12px;align-items:center;padding:14px 16px;border-bottom:1px solid var(--line);}
+.k-item:last-child{border-bottom:0;}
+.k-ic{width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;grid-row:span 2;}
+.k-ic.gave{background:#fbe6e2;color:var(--rust);} .k-ic.got{background:#e5efe6;color:var(--sap);}
+.k-note{font-weight:600;font-size:15px;word-break:break-word;}
+.k-date{font-size:12.5px;color:var(--ink-soft);margin-top:2px;}
+.k-amt{text-align:right;grid-row:span 2;}
+.k-money{font-family:'JetBrains Mono',monospace;font-weight:700;font-size:16px;}
+.k-money.gave{color:var(--rust);} .k-money.got{color:var(--sap);}
+.k-bal{font-size:12px;color:var(--ink-soft);margin-top:3px;font-family:'JetBrains Mono',monospace;}
+.k-act{grid-column:2 / -1;display:flex;gap:6px;justify-content:flex-end;}
+@media (max-width:1024px){
+  .k-title{font-size:30px;}
+  .k-back{flex:1 1 100%;min-height:50px;justify-content:center;}
+  .k-actions{flex:1 1 100%;} .k-actions .btn{flex:1;min-height:50px;}
+  .k-item{padding:14px;grid-template-columns:44px 1fr;}
+  .k-amt{grid-column:2;grid-row:auto;text-align:left;display:flex;justify-content:space-between;align-items:baseline;margin-top:4px;}
+  .k-act .btn{flex:1;min-height:46px;}
+  .k-act{grid-column:1 / -1;margin-top:6px;}
+}
 </style>
 </head>
 <body>
@@ -1182,6 +1209,7 @@ function renderNav(){
 }
 
 function go(route){
+  KHATA_VIEW = null;
   ROUTE = route;
   renderNav();
   renderPage();
@@ -3495,6 +3523,8 @@ function khataSummary(name){
   return { gave, got, net: round2(gave-got), count: mine.length };
 }
 function renderKhataPage(){
+  if(KHATA_VIEW !== null && (SHARED.khata||[]).some(e=>e.personName===KHATA_VIEW)) return renderKhataDetailPage(KHATA_VIEW);
+  KHATA_VIEW = null;
   const names = khataNames();
   const entries = SHARED.khata||[];
   const totalGave = sum(entries.filter(e=>e.type==='gave'), e=>e.amount);
@@ -3528,43 +3558,74 @@ function renderKhataPage(){
     <tbody>${rows||'<tr><td colspan="5" class="empty">No entries yet — click "+ New Entry" to add the first one.</td></tr>'}</tbody></table>
     </div>
   </div>
-  <div id="khata-detail"></div>`;
+  `;
 }
+let KHATA_VIEW = null;   // name whose entries are open on the full "person page"; null = main Khata list
 function openKhataDetail(name){
-  go('khata');
-  setTimeout(()=>renderKhataDetail(name), 0);
+  KHATA_VIEW = name;
+  ROUTE = 'khata';
+  renderNav();
+  renderPage();
+  closeSidebarMobile();
+  window.scrollTo(0,0);
+  const c = document.getElementById('content'); if(c) c.scrollTop = 0;
 }
+function closeKhataDetail(){
+  KHATA_VIEW = null;
+  renderPage();
+  window.scrollTo(0,0);
+}
+// Called after a save/delete: if a person page is open, keep showing it (for the saved name).
 function renderKhataDetail(name){
-  const box = document.getElementById('khata-detail');
-  if(!box) return;
-  const mine = (SHARED.khata||[]).filter(e=>e.personName===name).sort((a,b)=>a.date.localeCompare(b.date)); // stable sort: same-date entries stay in entry order
+  if(KHATA_VIEW === null) return;
+  KHATA_VIEW = (SHARED.khata||[]).some(e=>e.personName===name) ? name : null;
+  renderPage();
+}
+// Full page: every entry of one person, shown as a list.
+function renderKhataDetailPage(name){
+  const mine = (SHARED.khata||[]).filter(e=>e.personName===name).sort((a,b)=>a.date.localeCompare(b.date)); // stable: same-date entries stay in entry order
   let running=0;
   const withBal = mine.map(e=>{ running += (e.type==='gave'?e.amount:-e.amount); return {...e, balance: round2(running)}; });
   const s = khataSummary(name);
   const nEsc = esc(name).replace(/'/g,"\\'");
   const isMgr = managerNames().includes(name);
-  box.innerHTML = `
-  <div class="card" style="margin-top:16px;">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
-      <div><h3 class="slab" style="margin:0;">${esc(name)} ${isMgr?`<span style="font-size:12px;font-weight:400;color:var(--ink-soft);">· also a Manager — <a href="#" onclick="event.preventDefault();openManagerDetail('${nEsc}')" style="color:var(--copper-deep);">view Manager Ledger</a></span>`:''}</h3>
-        <div class="page-sub" style="margin-top:2px;">Gave ${money(s.gave)} · Received ${money(s.got)} · Balance <b>${money(Math.abs(s.net))} ${s.net>0?'(they owe you)':s.net<0?'(you owe them)':'(settled)'}</b></div>
+  const status = s.net>0?'They owe you':s.net<0?'You owe them':'Settled';
+  const items = withBal.map(e=>{
+    const gave = e.type==='gave';
+    const tag = e.sourceLotId?'via Timber Lot':e.sourceStockInId?'via Stock In':e.managerLedgerEntryId?'linked to Manager Ledger':'';
+    const acts = e.sourceLotId ? `<button class="btn btn-sm btn-ghost" onclick="go('lots')">View in Stock</button>`
+      : e.sourceStockInId ? `<button class="btn btn-sm btn-ghost" onclick="go('stockin')">View in Stock In</button>`
+      : `<button class="btn btn-sm btn-ghost" onclick="openKhataEntryForm(null,'${e.id}')">Edit</button><button class="btn btn-sm btn-ghost btn-danger" onclick="deleteKhataEntry('${e.id}')">Delete</button>`;
+    return `<div class="k-item">
+      <div class="k-ic ${gave?'gave':'got'}">${gave?'↑':'↓'}</div>
+      <div class="k-main">
+        <div class="k-note">${esc(e.note||(gave?'You gave':'You received'))}</div>
+        <div class="k-date">${fmtDate(e.date)} · ${gave?'You gave':'You received'}${tag?` · ${tag}`:''}</div>
       </div>
-      <div style="display:flex;gap:8px;">
+      <div class="k-amt">
+        <div class="k-money ${gave?'gave':'got'}">${gave?'−':'+'} ${money(e.amount)}</div>
+        <div class="k-bal">Bal ${money(Math.abs(e.balance))} ${e.balance>0?'Dr':(e.balance<0?'Cr':'')}</div>
+      </div>
+      <div class="k-act">${acts}</div>
+    </div>`;
+  }).join('');
+  return `
+  <div class="k-page">
+    <div class="k-top">
+      <button class="btn k-back" onclick="closeKhataDetail()">← Back to Khata Book</button>
+      <div class="k-actions">
         <button class="btn btn-sm" onclick="printKhataStatement('${nEsc}')">📄 PDF Statement</button>
-        <button class="btn btn-primary btn-sm" onclick="openKhataEntryForm('${nEsc}')">+ Add Entry for ${esc(name)}</button>
+        <button class="btn btn-primary btn-sm" onclick="openKhataEntryForm('${nEsc}')">+ Add Entry</button>
       </div>
     </div>
-    <div class="tbl-wrap">
-    <table><thead><tr><th>Date</th><th>Note</th><th class="num">You Gave</th><th class="num">You Received</th><th class="num">Balance</th><th></th></tr></thead>
-    <tbody>${withBal.length?withBal.map(e=>`<tr>
-      <td>${fmtDate(e.date)}</td>
-      <td>${esc(e.note||'—')}${e.sourceLotId?' <span style="font-size:10px;color:var(--ink-soft);">(via Timber Lot)</span>':e.sourceStockInId?' <span style="font-size:10px;color:var(--ink-soft);">(via Stock In)</span>':e.managerLedgerEntryId?' <span style="font-size:10px;color:var(--ink-soft);">🔗 linked to Manager Ledger</span>':''}</td>
-      <td class="num mono">${e.type==='gave'?money(e.amount):''}</td>
-      <td class="num mono">${e.type==='got'?money(e.amount):''}</td>
-      <td class="num mono">${money(Math.abs(e.balance))} ${e.balance>0?'Dr':(e.balance<0?'Cr':'')}</td>
-      <td style="white-space:nowrap;">${e.sourceLotId?`<button class="btn btn-sm btn-ghost" onclick="go('lots')">View in Stock</button>`:e.sourceStockInId?`<button class="btn btn-sm btn-ghost" onclick="go('stockin')">View in Stock In</button>`:`<button class="btn btn-sm btn-ghost" onclick="openKhataEntryForm(null,'${e.id}')">Edit</button><button class="btn btn-sm btn-ghost btn-danger" onclick="deleteKhataEntry('${e.id}')">Delete</button>`}</td>
-    </tr>`).join(''):'<tr><td colspan="6" class="empty">No entries yet.</td></tr>'}</tbody></table>
+    <div class="k-title">${esc(name)}</div>
+    <div class="page-sub">${mine.length} ${mine.length===1?'entry':'entries'}${isMgr?` · also a Manager — <a href="#" onclick="event.preventDefault();openManagerDetail('${nEsc}')" style="color:var(--copper-deep);">open Manager Ledger</a>`:''}</div>
+    <div class="grid g3" style="margin:16px 0;">
+      <div class="stat neg"><div class="label">You Gave</div><div class="value">${money(s.gave)}</div></div>
+      <div class="stat pos"><div class="label">You Received</div><div class="value">${money(s.got)}</div></div>
+      <div class="stat ${s.net>0?'neg':s.net<0?'pos':''}"><div class="label">Balance · ${status}</div><div class="value">${money(Math.abs(s.net))}</div></div>
     </div>
+    <div class="k-list">${items || '<div class="empty">No entries yet.</div>'}</div>
   </div>`;
 }
 function openKhataEntryForm(prefillName, existingId){
@@ -4800,7 +4861,7 @@ function maybeRemindBackup(){
 (function(){
   const TABS=[['dashboard','🏠','Home'],['sales','🧾','Sales'],['khata','📒','Khata'],['lots','🪵','Stock']];
   const ADD={sales:()=>openSalesForm(),purchase:()=>openPurchaseForm(),receipts:()=>openReceiptForm(),payments:()=>openPaymentForm(),
-    customers:()=>openPartyForm('customer'),suppliers:()=>openPartyForm('supplier'),khata:()=>openKhataEntryForm(),
+    customers:()=>openPartyForm('customer'),suppliers:()=>openPartyForm('supplier'),khata:()=>openKhataEntryForm(KHATA_VIEW||undefined),
     managers:()=>openManagerEntryForm(),lots:()=>openLotForm(),stockin:()=>openStockInForm()};
   const ADDLABEL={khata:'New Khata Entry',purchase:'New Purchase Bill',receipts:'New Receipt',payments:'New Payment',customers:'New Customer',suppliers:'New Supplier',managers:'New Manager Entry',lots:'New Timber Lot',stockin:'New Stock In'};
   window.closeMore=()=>document.body.classList.remove('more-open');
